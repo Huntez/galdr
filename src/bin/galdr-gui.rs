@@ -36,6 +36,8 @@ const TRAY_ARG: &str = "--tray";
 struct Settings {
     /// The phone to connect to: its IP, or `usb:<serial>` (see `Phone::key`).
     phone: String,
+    /// What is typed under Enter IP; becomes `phone` on Connect.
+    typed_ip: String,
     /// Output device galdr sends audio to so other programs hear it as a microphone
     /// (usually a virtual cable).
     mic: Option<String>,
@@ -51,6 +53,8 @@ struct Settings {
     connect_on_start: bool,
     /// Phones tab: false = search the network, true = type the IP by hand.
     manual_ip: bool,
+    /// A phone reachable both ways connects over USB (steadier, less delay) unless Wi-Fi is picked.
+    prefer_usb: bool,
     close_to_tray: bool,
 }
 
@@ -58,6 +62,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             phone: String::new(),
+            typed_ip: String::new(),
             mic: None,
             listen: false,
             auto_buffer: true,
@@ -67,6 +72,7 @@ impl Default for Settings {
             connect_on_start: false,
             close_to_tray: true,
             manual_ip: false,
+            prefer_usb: true,
         }
     }
 }
@@ -156,7 +162,7 @@ struct GaldrApp {
     autostart: bool,
     /// Started with `--tray`: hide the window on the first frame.
     start_hidden: bool,
-    /// Searches for phones while not connected.
+    /// Searches for phones on the network and USB for as long as Galdr runs.
     discovery: Option<Discovery>,
     /// What the search found, refreshed once per frame.
     phones: Vec<Phone>,
@@ -180,6 +186,10 @@ impl GaldrApp {
         }
         let devices = Devices::scan();
         let mut settings = settings;
+        // The typed IP used to share `phone` with the phone picked under Search.
+        if settings.typed_ip.is_empty() && settings.phone.parse::<IpAddr>().is_ok() {
+            settings.typed_ip = settings.phone.clone();
+        }
         // Earlier default ports.
         if (settings.control_port, settings.media_port) == (8125, 30000) {
             settings.control_port = DEFAULT_CONTROL_PORT;
@@ -405,8 +415,9 @@ impl GaldrApp {
             });
     }
 
-    /// Two tabs: Search lists the phones that answered, Enter IP takes an address by hand.
-    /// One card per phone, each with its own Connect button; the connected one shows the status.
+    /// Two tabs: Search lists the phones found on the network and on USB, Enter IP takes an
+    /// address by hand. One card per phone, with Wi-Fi or USB to choose when both reach it; while
+    /// connected only the live card is shown, with the status.
     fn phones_ui(&mut self, ui: &mut egui::Ui, stats: Option<&Stats>) {
         let connected = stats.is_some();
         section(ui, "Phones", |ui| {
@@ -419,57 +430,76 @@ impl GaldrApp {
             ui.add_space(4.0);
 
             let chosen = self.settings.phone.trim().to_string();
-            let chosen_addr = chosen.parse::<IpAddr>().ok();
-            // The phone being streamed from, for when it is not among the cards below.
-            let live_card = |addr: IpAddr, details: &str| Phone {
-                name: stats
-                    .and_then(|s| s.phone_name.clone())
-                    .unwrap_or_else(|| addr.to_string()),
-                details: details.into(),
-                addr,
-                control_port: self.settings.control_port,
-                usb: None,
+            // The phone being streamed from, for when it is not among the cards below
+            // (e.g. typed by hand, or its cable was pulled), so the status stays in view.
+            let live_card = |key: &str| {
+                let usb = key.strip_prefix("usb:").map(str::to_string);
+                let phone = Phone {
+                    name: String::new(),
+                    details: String::new(),
+                    addr: key.parse().unwrap_or(Ipv4Addr::LOCALHOST.into()),
+                    control_port: self.settings.control_port,
+                    usb: usb.clone(),
+                };
+                PhoneCard {
+                    name: stats
+                        .and_then(|s| s.phone_name.clone())
+                        .unwrap_or_else(|| key.to_string()),
+                    details: String::new(),
+                    wifi: usb.is_none().then(|| phone.clone()),
+                    usb: usb.map(|_| phone),
+                }
             };
-            let mut cards = Vec::new();
-            if self.settings.manual_ip {
-                // Field and button in one row; a card only once connected, named by the phone.
-                match chosen_addr.filter(|_| connected) {
-                    Some(addr) => cards.push(live_card(addr, "")),
-                    None => {
-                        ui.horizontal(|ui| {
-                            let button_w = 90.0;
-                            ui.add(
-                                egui::TextEdit::singleline(&mut self.settings.phone)
-                                    .hint_text("IP shown in Galdr on the phone, e.g. 192.168.1.20")
-                                    .desired_width(
-                                        ui.available_width()
-                                            - button_w
-                                            - ui.spacing().item_spacing.x,
-                                    ),
-                            );
-                            let connect =
-                                accent_button("Connect").min_size(egui::vec2(button_w, 0.0));
-                            if ui.add(connect).clicked() {
-                                self.connect();
-                            }
-                        });
-                    }
-                }
-            } else {
-                cards = self.phones.clone();
-                if let Some(addr) = chosen_addr
-                    .filter(|a| connected && !cards.iter().any(|p| p.key() == a.to_string()))
-                {
-                    cards.push(live_card(addr, ""));
-                }
+            let mut cards = PhoneCard::group(&self.phones);
+            if connected {
+                // Only the phone being streamed from, whichever tab it was picked on.
+                cards.retain(|c| c.has(&chosen));
                 if cards.is_empty() {
-                    ui.label(RichText::new("Searching… press Start in Galdr on the phone").weak());
+                    cards.push(live_card(&chosen));
                 }
+            } else if self.settings.manual_ip {
+                // Field and button in one row; the card appears once connected.
+                cards.clear();
+                ui.horizontal(|ui| {
+                    let button_w = 90.0;
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.settings.typed_ip)
+                            .hint_text("IP shown in Galdr on the phone, e.g. 192.168.1.20")
+                            .desired_width(
+                                ui.available_width() - button_w - ui.spacing().item_spacing.x,
+                            ),
+                    );
+                    let connect = accent_button("Connect").min_size(egui::vec2(button_w, 0.0));
+                    if ui.add(connect).clicked() {
+                        self.settings.phone = self.settings.typed_ip.trim().to_string();
+                        self.connect();
+                    }
+                });
+            } else if cards.is_empty() {
+                ui.label(RichText::new("Searching… press Start in Galdr on the phone").weak());
             }
 
-            for phone in &cards {
-                let this_one = phone.key() == chosen;
-                let live = stats.filter(|_| this_one);
+            for card in &cards {
+                let live = stats.filter(|_| card.has(&chosen));
+                // The connected way, else the preferred one when both reach the phone.
+                let phone = match (&card.wifi, &card.usb) {
+                    (Some(w), Some(u)) if live.is_some() => {
+                        if u.key() == chosen {
+                            u
+                        } else {
+                            w
+                        }
+                    }
+                    (Some(w), Some(u)) => {
+                        if self.settings.prefer_usb {
+                            u
+                        } else {
+                            w
+                        }
+                    }
+                    (Some(p), None) | (None, Some(p)) => p,
+                    (None, None) => continue,
+                };
                 let stroke = if live.is_some() {
                     egui::Stroke::new(1.5, ACCENT)
                 } else {
@@ -483,19 +513,19 @@ impl GaldrApp {
                         ui.set_width(ui.available_width());
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
-                                ui.label(RichText::new(&phone.name).size(16.0).strong());
-                                // A USB phone's address is just localhost: its details say USB.
-                                let mut line = match phone.usb {
-                                    Some(_) => String::new(),
-                                    None => phone.addr.to_string(),
-                                };
-                                if !phone.details.is_empty() {
-                                    line = if line.is_empty() {
-                                        phone.details.clone()
-                                    } else {
-                                        format!("{}   ·   {line}", phone.details)
-                                    };
-                                }
+                                ui.label(RichText::new(&card.name).size(16.0).strong());
+                                // Over USB the address is just localhost: not worth showing.
+                                let line = [
+                                    card.details.clone(),
+                                    match phone.usb {
+                                        Some(_) => String::new(),
+                                        None => phone.addr.to_string(),
+                                    },
+                                ]
+                                .into_iter()
+                                .filter(|s| !s.is_empty())
+                                .collect::<Vec<_>>()
+                                .join("   ·   ");
                                 ui.label(RichText::new(line).small().weak());
                             });
                             ui.with_layout(
@@ -508,14 +538,27 @@ impl GaldrApp {
                                         {
                                             self.disconnect();
                                         }
+                                    } else if ui.add(accent_button("Connect")).clicked() {
+                                        self.settings.phone = phone.key();
+                                        self.settings.control_port = phone.control_port;
+                                        self.connect();
+                                    }
+                                    ui.add_space(4.0);
+                                    // Right to left: USB is added first so it ends up on the right.
+                                    if card.wifi.is_some() && card.usb.is_some() && live.is_none() {
+                                        ui.selectable_value(
+                                            &mut self.settings.prefer_usb,
+                                            true,
+                                            "USB",
+                                        );
+                                        ui.selectable_value(
+                                            &mut self.settings.prefer_usb,
+                                            false,
+                                            "Wi-Fi",
+                                        );
                                     } else {
-                                        let connect = accent_button("Connect");
-                                        // One phone at a time.
-                                        if ui.add_enabled(stats.is_none(), connect).clicked() {
-                                            self.settings.phone = phone.key();
-                                            self.settings.control_port = phone.control_port;
-                                            self.connect();
-                                        }
+                                        let way = if phone.usb.is_some() { "USB" } else { "Wi-Fi" };
+                                        ui.label(RichText::new(way).weak());
                                     }
                                 },
                             );
@@ -534,16 +577,16 @@ impl GaldrApp {
         });
     }
 
-    /// Searches only while disconnected; fills in the IP when exactly one phone answers and
-    /// none was entered yet.
+    /// Refreshes the phones found; picks the phone when exactly one answers and none was chosen
+    /// yet.
     fn update_discovery(&mut self, ctx: &egui::Context) {
-        if self.engine.is_some() || self.settings.manual_ip {
-            self.discovery = None;
-            return;
-        }
+        // Kept running throughout (one broadcast and one adb call every 2 s): restarting it on
+        // every tab switch or disconnect emptied the list and rebuilt it card by card.
         let discovery = self.discovery.get_or_insert_with(Discovery::start);
         self.phones = discovery.phones();
-        if self.settings.phone.trim().is_empty()
+        if self.engine.is_none()
+            && !self.settings.manual_ip
+            && self.settings.phone.trim().is_empty()
             && let [only] = self.phones.as_slice()
         {
             self.settings.phone = only.key();
@@ -799,14 +842,79 @@ fn status_line(ui: &mut egui::Ui, color: Color32, text: &str) {
     });
 }
 
+/// One phone as the user sees it: reachable over Wi-Fi, USB or both. The network and adb know
+/// it by different addresses, so the two are matched by name and Android version.
+struct PhoneCard {
+    name: String,
+    details: String,
+    wifi: Option<Phone>,
+    usb: Option<Phone>,
+}
+
+impl PhoneCard {
+    fn group(phones: &[Phone]) -> Vec<PhoneCard> {
+        let android = |details: &str| {
+            details
+                .split('·')
+                .map(str::trim)
+                .find(|part| part.starts_with("Android"))
+                .map(str::to_string)
+        };
+        let mut cards: Vec<PhoneCard> = Vec::new();
+        for phone in phones {
+            let usb = phone.usb.is_some();
+            let same = cards.iter_mut().find(|c| {
+                let other = c.wifi.as_ref().or(c.usb.as_ref());
+                let free = if usb {
+                    c.usb.is_none()
+                } else {
+                    c.wifi.is_none()
+                };
+                free && c.name == phone.name
+                    && other.and_then(|o| android(&o.details)) == android(&phone.details)
+                    && android(&phone.details).is_some()
+            });
+            let card = match same {
+                Some(card) => card,
+                None => {
+                    cards.push(PhoneCard {
+                        name: phone.name.clone(),
+                        details: String::new(),
+                        wifi: None,
+                        usb: None,
+                    });
+                    cards.last_mut().unwrap()
+                }
+            };
+            // The network's details also name the model when the phone was renamed.
+            if !usb || card.details.is_empty() {
+                card.details = phone.details.clone();
+            }
+            if usb {
+                card.usb = Some(phone.clone());
+            } else {
+                card.wifi = Some(phone.clone());
+            }
+        }
+        cards
+    }
+
+    /// `key` (see `Phone::key`) is one of the ways to this phone.
+    fn has(&self, key: &str) -> bool {
+        [&self.wifi, &self.usb]
+            .into_iter()
+            .flatten()
+            .any(|p| p.key() == key)
+    }
+}
+
 fn status_ui(ui: &mut egui::Ui, s: &Stats) {
     let (color, text) = match &s.state {
         State::Connecting => (YELLOW, "Connecting…".to_string()),
         State::Streaming => (
             GREEN,
             format!(
-                "Streaming from {} → {}",
-                s.phone_name.as_deref().unwrap_or("the phone"),
+                "Streaming → {}",
                 s.outputs
                     .iter()
                     .map(|o| cable_name(o))
@@ -1123,4 +1231,46 @@ fn hide_title_icon(frame: &eframe::Frame) {
         )
     };
     DONE.store(ok == 0, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn phone(name: &str, details: &str, usb: Option<&str>) -> Phone {
+        Phone {
+            name: name.into(),
+            details: details.into(),
+            addr: if usb.is_some() {
+                Ipv4Addr::LOCALHOST.into()
+            } else {
+                Ipv4Addr::new(192, 168, 1, 20).into()
+            },
+            control_port: DEFAULT_CONTROL_PORT,
+            usb: usb.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn one_card_per_phone_whichever_way_it_is_reached() {
+        let cards = PhoneCard::group(&[
+            phone("Pixel 7", "Android 17", None),
+            phone("Pixel 7", "Android 17", Some("2A21")),
+            phone("Pixel 7", "allow USB debugging on the phone", Some("R58N")),
+            phone("Galaxy", "SM-S911B · Android 15", None),
+        ]);
+        let ways: Vec<(&str, bool, bool)> = cards
+            .iter()
+            .map(|c| (c.name.as_str(), c.wifi.is_some(), c.usb.is_some()))
+            .collect();
+        assert_eq!(
+            ways,
+            [
+                ("Pixel 7", true, true),
+                ("Pixel 7", false, true),
+                ("Galaxy", true, false)
+            ]
+        );
+        assert!(cards[0].has("usb:2A21") && cards[0].has("192.168.1.20"));
+    }
 }

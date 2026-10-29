@@ -95,18 +95,12 @@ fn usb_phones(names: &mut HashMap<String, (String, String)>) -> Vec<Phone> {
                     .entry(d.serial.clone())
                     .or_insert_with(|| {
                         let (name, version) = adb::describe(&d.serial);
-                        let details = match version {
-                            Some(v) => format!("Android {v}   ·   USB"),
-                            None => "USB".into(),
-                        };
+                        let details = version.map(|v| format!("Android {v}")).unwrap_or_default();
                         (name.unwrap_or_else(|| d.model.clone()), details)
                     })
                     .clone()
             } else {
-                (
-                    d.model.clone(),
-                    "USB   ·   allow USB debugging on the phone".into(),
-                )
+                (d.model.clone(), "allow USB debugging on the phone".into())
             };
             Phone {
                 name,
