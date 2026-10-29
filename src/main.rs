@@ -47,9 +47,12 @@ struct ConnectArgs {
     /// Also play to the default speakers (listen to yourself)
     #[arg(long)]
     monitor: bool,
-    /// Playback buffer in milliseconds
+    /// Playback buffer in milliseconds (where the adaptive buffer starts)
     #[arg(long, default_value_t = 60)]
     latency_ms: u32,
+    /// Keep the buffer at --latency-ms instead of sizing it to the network
+    #[arg(long)]
+    fixed_buffer: bool,
     /// Also record what is received to a WAV file
     #[arg(long)]
     wav: Option<PathBuf>,
@@ -113,6 +116,7 @@ fn connect(args: ConnectArgs) -> Result<()> {
         outputs,
         monitor,
         latency_ms: args.latency_ms,
+        adaptive_buffer: !args.fixed_buffer,
         wav: args.wav,
     });
     let deadline = args
@@ -144,8 +148,13 @@ fn connect(args: ConnectArgs) -> Result<()> {
         }
         if last_stats.elapsed() >= STATS_PERIOD {
             println!(
-                "rx {}  lost {}  bad {}  buffer {}ms  level {:.2}",
-                stats.received, stats.lost, stats.bad, stats.buffered_ms, stats.level
+                "rx {}  lost {}  bad {}  buffer {}/{}ms  level {:.2}",
+                stats.received,
+                stats.lost,
+                stats.bad,
+                stats.buffered_ms,
+                stats.target_ms,
+                stats.level
             );
             last_stats = Instant::now();
         }

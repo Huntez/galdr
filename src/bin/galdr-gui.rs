@@ -40,6 +40,8 @@ struct Settings {
     mic: Option<String>,
     /// Also play to the default speakers.
     listen: bool,
+    /// Size the buffer to the network; `latency_ms` is then only where it starts.
+    auto_buffer: bool,
     latency_ms: u32,
     /// TCP port of the phone app.
     control_port: u16,
@@ -57,6 +59,7 @@ impl Default for Settings {
             phone: String::new(),
             mic: None,
             listen: false,
+            auto_buffer: true,
             latency_ms: DEFAULT_LATENCY_MS,
             control_port: DEFAULT_CONTROL_PORT,
             media_port: DEFAULT_MEDIA_PORT,
@@ -232,6 +235,7 @@ impl GaldrApp {
         config.outputs = outputs;
         config.monitor = self.settings.listen;
         config.latency_ms = self.settings.latency_ms;
+        config.adaptive_buffer = self.settings.auto_buffer;
         config.control_port = self.settings.control_port;
         config.media_port = self.settings.media_port;
         // The previous engine must release the UDP port and the driver first.
@@ -365,22 +369,32 @@ impl GaldrApp {
                             ui.end_row();
 
                             ui.label("Buffer");
-                            // Leave room for the value box so a narrow window does not overflow.
-                            ui.spacing_mut().slider_width =
-                                (ui.available_width() - 70.0).clamp(60.0, 220.0);
-                            ui.add(
-                                egui::Slider::new(&mut self.settings.latency_ms, 20..=300)
-                                    .suffix(" ms"),
-                            )
-                            .on_hover_text(
-                                "Lower = less delay, higher = fewer dropouts on weak Wi-Fi",
-                            );
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut self.settings.auto_buffer, "Auto")
+                                    .on_hover_text(
+                                        "As small as your Wi-Fi allows: grows when packets                                          arrive late, shrinks slowly when they don't",
+                                    );
+                                if !self.settings.auto_buffer {
+                                    // Leave room for the value box so a narrow window does not
+                                    // overflow.
+                                    ui.spacing_mut().slider_width =
+                                        (ui.available_width() - 70.0).clamp(60.0, 220.0);
+                                    ui.add(
+                                        egui::Slider::new(&mut self.settings.latency_ms, 20..=300)
+                                            .suffix(" ms"),
+                                    )
+                                    .on_hover_text(
+                                        "Lower = less delay, higher = fewer dropouts on weak Wi-Fi",
+                                    );
+                                }
+                            });
                             ui.end_row();
                         });
                     if ui.button("Reset to defaults").clicked() {
                         self.settings.control_port = DEFAULT_CONTROL_PORT;
                         self.settings.media_port = DEFAULT_MEDIA_PORT;
                         self.settings.latency_ms = DEFAULT_LATENCY_MS;
+                        self.settings.auto_buffer = true;
                     }
                 });
             });
@@ -801,8 +815,8 @@ fn status_ui(ui: &mut egui::Ui, s: &Stats) {
     );
     ui.label(
         RichText::new(format!(
-            "packets {}   ·   lost {}   ·   bad {}   ·   buffer {} ms",
-            s.received, s.lost, s.bad, s.buffered_ms
+            "packets {}   ·   lost {}   ·   bad {}   ·   buffer {} / {} ms",
+            s.received, s.lost, s.bad, s.buffered_ms, s.target_ms
         ))
         .small()
         .weak(),

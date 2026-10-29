@@ -13,12 +13,15 @@ use anyhow::{Context, Result, bail};
 
 use crate::audio::{self, PcmQueue, Playback};
 use crate::control::ControlSession;
-use crate::opus::{Decoder, FRAME_SAMPLES, MAX_FRAME_SAMPLES, SAMPLE_RATE};
+use crate::jitter::Jitter;
+use crate::opus::{Decoder, MAX_FRAME_SAMPLES, SAMPLE_RATE};
 use crate::protocol::{DEFAULT_CONTROL_PORT, DEFAULT_MEDIA_PORT, parse_media};
 use crate::wav::WavWriter;
 
-/// Packets lost in a row that we still conceal; longer gaps are just skipped.
-const MAX_CONCEALED_FRAMES: u32 = 5;
+/// Upper bound of the adaptive buffer; the lower one is half a packet + 10 ms.
+const MAX_BUFFER_MS: u32 = 300;
+/// Audio lost in a row that we still conceal; longer gaps are just skipped.
+const MAX_CONCEALED_MS: u32 = 100;
 const MEDIA_SILENCE_TIMEOUT: Duration = Duration::from_secs(5);
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 /// Digital silence this long is shown as such (e.g. the volume on the phone is at 0).
@@ -39,7 +42,10 @@ pub struct Config {
     pub outputs: Vec<Output>,
     /// Also play to the default speakers; can be switched while running with [`Engine::set_monitor`].
     pub monitor: bool,
+    /// Playback buffer; with `adaptive_buffer` only where it starts.
     pub latency_ms: u32,
+    /// Size the buffer to how unevenly packets arrive (see [`Jitter`]).
+    pub adaptive_buffer: bool,
     pub wav: Option<PathBuf>,
 }
 
@@ -52,6 +58,7 @@ impl Config {
             outputs: vec![Output::Default],
             monitor: false,
             latency_ms: 60,
+            adaptive_buffer: true,
             wav: None,
         }
     }
@@ -90,6 +97,8 @@ pub struct Stats {
     pub lost: u64,
     pub bad: u64,
     pub buffered_ms: u32,
+    /// What the buffer is aiming for.
+    pub target_ms: u32,
     /// Recent peak, 0.0..=1.0.
     pub level: f32,
 }
@@ -104,6 +113,7 @@ impl Default for Stats {
             lost: 0,
             bad: 0,
             buffered_ms: 0,
+            target_ms: 0,
             level: 0.0,
         }
     }
@@ -184,13 +194,16 @@ impl Worker {
     }
 
     fn run_inner(&self) -> Result<()> {
-        let mut sinks = Sinks::default();
+        let mut sinks = Sinks {
+            latency_ms: self.config.latency_ms,
+            ..Sinks::default()
+        };
         for output in &self.config.outputs {
             let device = match output {
                 Output::Device(d) => Some(d.as_str()),
                 Output::Default => None,
             };
-            let queue = PcmQueue::new(self.config.latency_ms);
+            let queue = PcmQueue::new(sinks.latency_ms);
             let (stream, name) = audio::start_playback(device, queue.clone())?;
             sinks.queues.push(queue);
             sinks.streams.push(stream);
@@ -258,6 +271,16 @@ impl Worker {
         let mut last_packet = Instant::now();
         let mut last_sound = Instant::now();
         let mut last_sync = Instant::now();
+        // Phones announce 5, 10 or 20 ms; anything odd is treated as the original 20.
+        let frame_ms = match session.welcome.frame_ms {
+            ms @ 1..=60 => ms as u32,
+            _ => 20,
+        };
+        let frame_samples = (SAMPLE_RATE * frame_ms / 1000) as usize;
+        let mut jitter = cfg
+            .adaptive_buffer
+            .then(|| Jitter::new(frame_ms, cfg.latency_ms, frame_ms / 2 + 10, MAX_BUFFER_MS));
+        sinks.set_latency(cfg.latency_ms);
 
         loop {
             if self.stopped() {
@@ -307,12 +330,15 @@ impl Worker {
                     continue; // late or duplicate
                 }
                 lost = ahead as u64;
-                for _ in 0..ahead.min(MAX_CONCEALED_FRAMES) {
-                    let got = decoder.decode(None, &mut pcm[..FRAME_SAMPLES])?;
+                for _ in 0..ahead.min(MAX_CONCEALED_MS / frame_ms) {
+                    let got = decoder.decode(None, &mut pcm[..frame_samples])?;
                     sinks.deliver(&pcm[..got])?;
                 }
             }
             expected = Some(packet.seq.wrapping_add(1));
+            if let Some(target) = jitter.as_mut().and_then(|j| j.packet(packet.timestamp)) {
+                sinks.set_latency(target);
+            }
 
             let (peak, bad) = match decoder.decode(Some(packet.opus), &mut pcm) {
                 Ok(got) => {
@@ -326,11 +352,13 @@ impl Worker {
             }
             let silent = last_sound.elapsed() >= SILENT_AFTER;
             let buffered = sinks.queues.first().map_or(0, |q| q.buffered_ms());
+            let target = sinks.latency_ms;
             self.update(|s| {
                 s.received += 1;
                 s.lost += lost;
                 s.bad += bad;
                 s.buffered_ms = buffered;
+                s.target_ms = target;
                 s.level = (s.level * LEVEL_DECAY).max(peak.min(1.0));
                 s.state = if silent {
                     State::Silent
@@ -349,7 +377,7 @@ impl Worker {
         }
         sinks.monitor = None;
         if want {
-            let queue = PcmQueue::new(self.config.latency_ms);
+            let queue = PcmQueue::new(sinks.latency_ms);
             match audio::start_playback(None, queue.clone()) {
                 Ok((stream, name)) => sinks.monitor = Some((stream, queue, name)),
                 Err(e) => {
@@ -383,6 +411,8 @@ struct Sinks {
     /// Default speakers, switchable at runtime.
     monitor: Option<(Playback, Arc<PcmQueue>, String)>,
     wav: Option<WavWriter>,
+    /// Current buffer target of every queue.
+    latency_ms: u32,
 }
 
 impl Sinks {
@@ -390,6 +420,17 @@ impl Sinks {
         let mut names = self.names.clone();
         names.extend(self.monitor.as_ref().map(|m| m.2.clone()));
         names
+    }
+
+    fn set_latency(&mut self, ms: u32) {
+        self.latency_ms = ms;
+        for q in self
+            .queues
+            .iter()
+            .chain(self.monitor.as_ref().map(|m| &m.1))
+        {
+            q.set_latency_ms(ms);
+        }
     }
 
     fn deliver(&mut self, pcm: &[f32]) -> Result<()> {

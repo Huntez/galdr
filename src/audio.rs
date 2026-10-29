@@ -1,6 +1,7 @@
 //! Playback: a latency-bounded PCM queue drained by a cpal output stream.
 
 use std::collections::VecDeque;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result, bail};
@@ -18,7 +19,8 @@ const QUIET: f32 = 0.003;
 /// 48 kHz mono samples shared between the network thread and the audio callback.
 pub struct PcmQueue {
     inner: Mutex<QueueState>,
-    target: usize,
+    /// Samples to keep buffered; changed on the fly by [`PcmQueue::set_latency_ms`].
+    target: AtomicUsize,
 }
 
 struct QueueState {
@@ -28,31 +30,41 @@ struct QueueState {
 
 impl PcmQueue {
     pub fn new(latency_ms: u32) -> Arc<Self> {
-        let target = (SAMPLE_RATE * latency_ms / 1000) as usize;
+        let target = samples(latency_ms);
         Arc::new(Self {
             inner: Mutex::new(QueueState {
                 samples: VecDeque::with_capacity(target * 4),
                 priming: true,
             }),
-            target,
+            target: AtomicUsize::new(target),
         })
     }
 
+    /// Moves the target; the rate nudge and quiet-frame skipping then bring the queue there.
+    pub fn set_latency_ms(&self, latency_ms: u32) {
+        self.target.store(samples(latency_ms), Ordering::Relaxed);
+    }
+
+    fn target(&self) -> usize {
+        self.target.load(Ordering::Relaxed)
+    }
+
     pub fn push(&self, pcm: &[f32]) {
+        let target = self.target();
         let mut q = self.inner.lock().unwrap();
         // Wi-Fi delivers packets in bursts, which leaves the queue well above its target. A
         // near-silent frame (a pause between words) is then simply skipped: inaudible, and the
         // queue is back on target within one pause instead of slowly through the rate nudge.
-        let above = q.samples.len() + pcm.len() > self.target + self.target / 4;
+        let above = q.samples.len() + pcm.len() > target + target / 4;
         if above && !q.priming && pcm.iter().all(|s| s.abs() < QUIET) {
             return;
         }
         q.samples.extend(pcm);
         // Last resort when the phone runs far ahead (e.g. after a hiccup); normally the rate
         // nudge in `Resampler` keeps the queue near its target.
-        let limit = self.target * 2;
+        let limit = target * 2;
         if q.samples.len() > limit {
-            let excess = q.samples.len() - self.target;
+            let excess = q.samples.len() - target;
             q.samples.drain(..excess);
         }
     }
@@ -63,13 +75,14 @@ impl PcmQueue {
 
     /// Buffered audio relative to the target: 1.0 = on target.
     fn level(&self) -> f64 {
-        self.inner.lock().unwrap().samples.len() as f64 / self.target.max(1) as f64
+        self.inner.lock().unwrap().samples.len() as f64 / self.target().max(1) as f64
     }
 
     /// Fills `out` with consecutive samples; silence while (re)filling after an underrun.
     fn pop_into(&self, out: &mut [f32]) {
+        let target = self.target();
         let mut q = self.inner.lock().unwrap();
-        if q.priming && q.samples.len() >= self.target {
+        if q.priming && q.samples.len() >= target {
             q.priming = false;
         }
         for s in out.iter_mut() {
@@ -83,6 +96,10 @@ impl PcmQueue {
             q.priming = true;
         }
     }
+}
+
+fn samples(latency_ms: u32) -> usize {
+    (SAMPLE_RATE * latency_ms / 1000) as usize
 }
 
 pub fn list_output_devices() -> Result<Vec<String>> {
