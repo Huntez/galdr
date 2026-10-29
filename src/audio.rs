@@ -9,6 +9,9 @@ use cpal::{FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 
 use crate::opus::SAMPLE_RATE;
 
+#[cfg(windows)]
+mod wasapi;
+
 /// Peak below this (about -50 dBFS) counts as a pause that may be skipped when the queue is full.
 const QUIET: f32 = 0.003;
 
@@ -152,8 +155,16 @@ pub fn find_virtual_mics(outputs: &[String], inputs: &[String]) -> Vec<VirtualMi
     mics
 }
 
+/// A running output; dropping it stops playback.
+#[allow(dead_code)] // held only to be dropped
+pub enum Playback {
+    Cpal(Stream),
+    #[cfg(windows)]
+    LowLatency(wasapi::Output),
+}
+
 /// Opens the output named `name` (exact, else case-insensitive substring), or the default one.
-pub fn start_playback(name: Option<&str>, queue: Arc<PcmQueue>) -> Result<(Stream, String)> {
+pub fn start_playback(name: Option<&str>, queue: Arc<PcmQueue>) -> Result<(Playback, String)> {
     let host = cpal::default_host();
     let device = match name {
         Some(want) => {
@@ -181,6 +192,11 @@ pub fn start_playback(name: Option<&str>, queue: Arc<PcmQueue>) -> Result<(Strea
             .context("no default output device")?,
     };
     let device_name = device.description()?.name().to_string();
+    #[cfg(windows)]
+    match wasapi::start(Some(&device_name), queue.clone()) {
+        Ok(output) => return Ok((Playback::LowLatency(output), device_name)),
+        Err(e) => eprintln!("{device_name}: low-latency output unavailable ({e:#}), using cpal"),
+    }
     let supported = device.default_output_config()?;
     let format = supported.sample_format();
     let config: StreamConfig = supported.into();
@@ -192,7 +208,7 @@ pub fn start_playback(name: Option<&str>, queue: Arc<PcmQueue>) -> Result<(Strea
         other => bail!("unsupported output sample format {other}"),
     };
     stream.play()?;
-    Ok((stream, device_name))
+    Ok((Playback::Cpal(stream), device_name))
 }
 
 fn build<T>(device: &cpal::Device, config: StreamConfig, queue: Arc<PcmQueue>) -> Result<Stream>

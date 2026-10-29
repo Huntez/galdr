@@ -11,9 +11,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
-use cpal::Stream;
-
-use crate::audio::{self, PcmQueue};
+use crate::audio::{self, PcmQueue, Playback};
 use crate::control::ControlSession;
 use crate::opus::{Decoder, FRAME_SAMPLES, MAX_FRAME_SAMPLES, SAMPLE_RATE};
 use crate::protocol::{DEFAULT_CONTROL_PORT, DEFAULT_MEDIA_PORT, parse_media};
@@ -373,17 +371,17 @@ impl Worker {
     }
 }
 
-/// Everything decoded audio goes to. Lives on the worker thread: cpal streams must stay
-/// on the thread that created them.
+/// Everything decoded audio goes to. Lives on the worker thread: cpal streams (the fallback
+/// output) must stay on the thread that created them.
 #[derive(Default)]
 struct Sinks {
     /// Display names of the fixed outputs.
     names: Vec<String>,
     // One queue per device: their clocks drift independently.
     queues: Vec<Arc<PcmQueue>>,
-    streams: Vec<Stream>,
+    streams: Vec<Playback>,
     /// Default speakers, switchable at runtime.
-    monitor: Option<(Stream, Arc<PcmQueue>, String)>,
+    monitor: Option<(Playback, Arc<PcmQueue>, String)>,
     wav: Option<WavWriter>,
 }
 

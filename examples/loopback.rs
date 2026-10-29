@@ -1,5 +1,6 @@
 //! Diagnoses a virtual cable: plays a 440 Hz tone into an output through galdr's playback
-//! path, records the matching input, and reports formats, level and the frequency heard.
+//! path, records the matching input, and reports formats, level, the frequency heard and clicks
+//! (jumps a clean sine can't make: dropouts, underruns).
 //!
 //! cargo run --release --example loopback -- "CABLE Input (VB-Audio Virtual Cable)" "CABLE Output (VB-Audio Virtual Cable)"
 //!
@@ -8,7 +9,7 @@
 
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -44,15 +45,18 @@ fn main() -> Result<()> {
         let queue = queue.clone();
         thread::spawn(move || {
             let mut phase = 0f32;
-            for _ in 0..250 {
+            let start = Instant::now();
+            for n in 0..250 {
                 let frame: Vec<f32> = (0..960)
                     .map(|_| {
                         phase += 440.0 / SAMPLE_RATE as f32;
                         (phase * std::f32::consts::TAU).sin() * amplitude
                     })
                     .collect();
+                // Paced by the clock, like packets from the phone.
+                let due = start + Duration::from_millis(20 * n);
+                thread::sleep(due.saturating_duration_since(Instant::now()));
                 queue.push(&frame);
-                thread::sleep(Duration::from_millis(20));
             }
         })
     };
@@ -97,10 +101,16 @@ fn main() -> Result<()> {
         .filter(|w| w[0] < 0.0 && w[1] >= 0.0)
         .count();
     let secs = tail.len() as f32 / rate as f32;
+    // A sine's second difference stays below amplitude * (2 pi f / rate)^2; 10x that is a click.
+    let bend = amplitude * (std::f32::consts::TAU * 440.0 / rate as f32).powi(2) * 10.0;
+    let clicks = tail
+        .windows(3)
+        .filter(|w| (w[0] - 2.0 * w[1] + w[2]).abs() > bend)
+        .count();
     println!("recorded {} samples @ {rate} Hz", s.len());
     let db = |x: f32| 20.0 * x.max(1e-12).log10();
     println!(
-        "peak {peak:.7} = {:.1} dBFS (sent {amplitude} = {:.1} dBFS), frequency ~{:.0} Hz (sent 440)",
+        "peak {peak:.7} = {:.1} dBFS (sent {amplitude} = {:.1} dBFS), frequency ~{:.0} Hz (sent 440), clicks {clicks} in {secs:.1} s",
         db(peak),
         db(amplitude),
         crossings as f32 / secs
