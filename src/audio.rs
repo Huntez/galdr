@@ -35,8 +35,9 @@ impl PcmQueue {
     pub fn push(&self, pcm: &[f32]) {
         let mut q = self.inner.lock().unwrap();
         q.samples.extend(pcm);
-        // Drop the oldest audio when the phone runs ahead, so latency stays bounded.
-        let limit = self.target * 3;
+        // Last resort when the phone runs far ahead (e.g. after a hiccup); normally the rate
+        // nudge in `Resampler` keeps the queue near its target.
+        let limit = self.target * 2;
         if q.samples.len() > limit {
             let excess = q.samples.len() - self.target;
             q.samples.drain(..excess);
@@ -45,6 +46,11 @@ impl PcmQueue {
 
     pub fn buffered_ms(&self) -> u32 {
         (self.inner.lock().unwrap().samples.len() as u64 * 1000 / SAMPLE_RATE as u64) as u32
+    }
+
+    /// Buffered audio relative to the target: 1.0 = on target.
+    fn level(&self) -> f64 {
+        self.inner.lock().unwrap().samples.len() as f64 / self.target.max(1) as f64
     }
 
     /// Fills `out` with consecutive samples; silence while (re)filling after an underrun.
@@ -201,7 +207,13 @@ where
     Ok(stream)
 }
 
-/// Linear-interpolating rate converter from the 48 kHz queue to the device rate.
+/// The phone's and the output device's clocks never run at exactly the same speed, so the queue
+/// would slowly fill up or run dry. Playing up to this much faster or slower keeps it near its
+/// target; 0.5% is far below what an ear notices.
+const MAX_RATE_NUDGE: f64 = 0.005;
+
+/// Linear-interpolating rate converter from the 48 kHz queue to the device rate, nudged to keep
+/// the queue at its target.
 struct Resampler {
     step: f64,
     frac: f64,
@@ -226,13 +238,11 @@ impl Resampler {
         if frames == 0 {
             return;
         }
-        if self.step == 1.0 {
-            out.resize(frames, 0.0);
-            queue.pop_into(out);
-            return;
-        }
+        // Proportional to how far off target the queue is: 50% over plays 0.25% faster.
+        let nudge = ((queue.level() - 1.0) * MAX_RATE_NUDGE).clamp(-MAX_RATE_NUDGE, MAX_RATE_NUDGE);
+        let step = self.step * (1.0 + nudge);
         // Pull exactly the input this callback consumes (one per frac wrap), in one lock.
-        let needed = (self.frac + self.step * (frames - 1) as f64).floor() as usize;
+        let needed = (self.frac + step * (frames - 1) as f64).floor() as usize;
         self.input.resize(needed, 0.0);
         queue.pop_into(&mut self.input);
         let mut next = self.input.iter().copied();
@@ -243,7 +253,7 @@ impl Resampler {
                 self.frac -= 1.0;
             }
             out.push(self.prev + (self.cur - self.prev) * self.frac as f32);
-            self.frac += self.step;
+            self.frac += step;
         }
     }
 }
