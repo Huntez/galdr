@@ -23,6 +23,7 @@ Two parts: an Android app that captures the microphone and a PC client that turn
 microphone for other programs.
 
 - **Real microphone input** — raw capture, or Android noise suppression with one switch
+- **Noise suppression on the PC** — RNNoise and DeepFilterNet, the same with any phone
 - **Finds the phone by itself** — no IP to type on the same network
 - **Reconnects on its own** — after a Wi-Fi drop or a restart of the phone app
 - **Works with any app** — through VB-CABLE or any playback device
@@ -46,6 +47,7 @@ From [Releases](https://github.com/Huntez/galdr/releases):
   source when Android asks.
 - **`galdr-<version>-windows-x64.zip`** for the PC: unzip anywhere and run `galdr-gui.exe`.
   Windows SmartScreen may warn about an unknown publisher: *More info* → *Run anyway*.
+- `galdr-cli-<version>-windows-x64.zip` only if you want the command line version (see below).
 
 ### 2. Install a virtual microphone (once)
 
@@ -72,6 +74,21 @@ VB-CABLE keeps a large buffer by default. Galdr offers to lower it under *Microp
    microphone.
 
 Tick *Listen to myself* to hear what is sent.
+
+### Noise suppression
+
+Tick **Noise suppression** under *Sound* to clean the sound on the PC, the same whatever the
+phone. Three ways, switchable while connected:
+
+| | Delay | |
+|---|---|---|
+| **RNNoise** | +10 ms | Takes out steady background such as fans evenly |
+| **DeepFilterNet** | +10 ms | Separates the voice from the room much better; the background can cut in and out |
+| **Both** (default) | +20 ms | RNNoise, then DeepFilterNet: an even background and an isolated voice |
+
+The slider sets how much quieter the noise gets. Turn Android's *Noise suppression* off on the
+phone: with both, the voice can come out dull. DeepFilterNet needs
+`DeepFilterNet3_ll_onnx.tar.gz` next to Galdr (it comes in the download).
 
 ### USB instead of Wi-Fi
 
@@ -117,6 +134,7 @@ as *buffer now/target ms*:
 | Wi-Fi | 40–90 ms, depending on the router and how busy the air is |
 
 VB-CABLE adds about 45 ms on top of that on its own; *Lower it* (see Setup) trims a few ms more.
+Noise suppression adds 10–20 ms while it is on.
 
 To tune it:
 
@@ -131,13 +149,14 @@ To tune it:
 galdr find
 galdr devices
 galdr connect 192.168.1.20 --device "CABLE Input" --monitor
-galdr connect usb --device "CABLE Input"
+galdr connect usb --device "CABLE Input" --denoise
 galdr tune-cable
 ```
 
 `find` lists phones that pressed Start, and those on USB. `usb` connects to the phone on the
 cable (`usb:<serial>` picks one of several). `--device <name>` plays into a device (part of its
-name is enough), `--monitor` also plays to the speakers. See `galdr connect --help`.
+name is enough), `--monitor` also plays to the speakers, `--denoise` suppresses noise
+(`--denoise-model rnnoise|deepfilternet|both`, `--denoise-db`). See `galdr connect --help`.
 `tune-cable` lowers VB-CABLE's buffer, like *Lower it* in the window.
 
 ## Plans
@@ -154,6 +173,10 @@ name is enough), `--monitor` also plays to the speakers. See `galdr connect --he
 cargo build --release
 ```
 
+For DeepFilterNet, put its model next to the built programs (`target/release`):
+[`DeepFilterNet3_ll_onnx.tar.gz`](https://github.com/Rikorose/DeepFilterNet/raw/v0.5.6/models/DeepFilterNet3_ll_onnx.tar.gz)
+from DeepFilterNet v0.5.6. RNNoise is built in.
+
 **Android:** JDK 17+, the Android SDK with NDK and CMake (or open `android/` in Android Studio).
 libopus comes as a git submodule, so clone with `--recursive` or run
 `git submodule update --init` first:
@@ -165,7 +188,8 @@ gradlew assembleDebug
 
 **Releases** are built by GitHub Actions ([release.yml](.github/workflows/release.yml)): push a
 tag such as `v0.1.0` (matching `Cargo.toml` and `versionName`) and it drafts a release with the
-Windows zip (adb included) and the signed APK. The APK's key comes from repository secrets; for
+Windows zips, the window and the command line apart (adb and the DeepFilterNet model included),
+and the signed APK. The APK's key comes from repository secrets; for
 local release builds put it in `android/keystore.properties` (`storeFile`, `storePassword`,
 `keyAlias`, `keyPassword`), which git ignores. Without a key, release builds use the debug key.
 
@@ -178,3 +202,5 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md).
 *Not affiliated with VB-Audio.*
 
 MIT. The Android app bundles the Ubuntu font (Ubuntu Font Licence) and Hack (MIT, Bitstream Vera licence).
+The PC client includes RNNoise (via nnnoiseless, BSD-3-Clause) and uses DeepFilterNet and its
+model (MIT or Apache-2.0).

@@ -40,23 +40,40 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
-      - name: Package with adb
+      - name: Package
+        env:
+          # DeepFilterNet 3's low-latency model, from its v0.5.6 release (src/denoise.rs).
+          MODEL_URL: https://github.com/Rikorose/DeepFilterNet/raw/v0.5.6/models/DeepFilterNet3_ll_onnx.tar.gz
+          MODEL_SHA256: 5998e58e8ba0e09bb76986ef97b84afa065a571ef282d4a1222f341e3251cf3a
+          LICENSE_URL: https://github.com/Rikorose/DeepFilterNet/raw/v0.5.6/LICENSE-MIT
         run: |
           curl -fsSL -o platform-tools.zip \
             https://dl.google.com/android/repository/platform-tools-latest-windows.zip
           unzip -q platform-tools.zip
-          dir="galdr-$VERSION-windows-x64"
-          mkdir "$dir"
-          cp target/release/galdr-gui.exe target/release/galdr.exe README.md LICENSE "$dir/"
-          # adb for phones on a USB cable (see the README), with its licence notice.
-          cp platform-tools/adb.exe platform-tools/AdbWinApi.dll platform-tools/AdbWinUsbApi.dll "$dir/"
-          cp platform-tools/NOTICE.txt "$dir/adb-NOTICE.txt"
-          7z a -tzip "$dir.zip" "$dir" > /dev/null
+          curl -fsSL -o DeepFilterNet3_ll_onnx.tar.gz "$MODEL_URL"
+          echo "$MODEL_SHA256  DeepFilterNet3_ll_onnx.tar.gz" | sha256sum -c -
+          curl -fsSL -o DeepFilterNet-LICENSE.txt "$LICENSE_URL"
+          # The window and the command line apart: most people only want the window.
+          for kind in gui cli; do
+            if [ $kind = gui ]; then
+              dir="galdr-$VERSION-windows-x64"; exe=galdr-gui.exe
+            else
+              dir="galdr-cli-$VERSION-windows-x64"; exe=galdr.exe
+            fi
+            mkdir "$dir"
+            cp "target/release/$exe" README.md LICENSE "$dir/"
+            # adb for phones on a USB cable (see the README), with its licence notice.
+            cp platform-tools/adb.exe platform-tools/AdbWinApi.dll platform-tools/AdbWinUsbApi.dll "$dir/"
+            cp platform-tools/NOTICE.txt "$dir/adb-NOTICE.txt"
+            # The noise suppression model, with its licence.
+            cp DeepFilterNet3_ll_onnx.tar.gz DeepFilterNet-LICENSE.txt "$dir/"
+            7z a -tzip "$dir.zip" "$dir" > /dev/null
+          done
 
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: galdr-*-windows-x64.zip
+          path: galdr*-windows-x64.zip
 
   android:
     runs-on: ubuntu-latest

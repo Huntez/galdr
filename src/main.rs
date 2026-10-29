@@ -36,6 +36,14 @@ enum Command {
     TuneCable,
 }
 
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum DenoiseModel {
+    Rnnoise,
+    #[value(name = "deepfilternet")]
+    DeepFilterNet,
+    Both,
+}
+
 #[derive(clap::Args)]
 struct ConnectArgs {
     /// Phone IP address shown in the Galdr phone app, or `usb` (the phone on the cable) or
@@ -52,6 +60,16 @@ struct ConnectArgs {
     /// Also play to the default speakers (listen to yourself)
     #[arg(long)]
     monitor: bool,
+    /// Suppress background noise (adds 10-20 ms, see --denoise-model)
+    #[arg(long)]
+    denoise: bool,
+    /// How much quieter noise gets with --denoise, in dB (100: removed completely)
+    #[arg(long, default_value_t = galdr::denoise::DEFAULT_LIMIT_DB)]
+    denoise_db: u32,
+    /// With --denoise: rnnoise (steady background, 10 ms), deepfilternet (isolates the voice,
+    /// 10 ms) or both (one after the other, 20 ms)
+    #[arg(long, value_enum, default_value_t = DenoiseModel::Both)]
+    denoise_model: DenoiseModel,
     /// Playback buffer in milliseconds (where the adaptive buffer starts)
     #[arg(long, default_value_t = 60)]
     latency_ms: u32,
@@ -175,6 +193,14 @@ fn connect(args: ConnectArgs) -> Result<()> {
         media_port: args.media_port,
         outputs,
         monitor,
+        denoise: args.denoise.then_some(galdr::denoise::Settings {
+            model: match args.denoise_model {
+                DenoiseModel::Rnnoise => galdr::denoise::Model::Rnnoise,
+                DenoiseModel::DeepFilterNet => galdr::denoise::Model::DeepFilterNet,
+                DenoiseModel::Both => galdr::denoise::Model::Both,
+            },
+            limit_db: args.denoise_db,
+        }),
         latency_ms: args.latency_ms,
         adaptive_buffer: !args.fixed_buffer,
         wav: args.wav,

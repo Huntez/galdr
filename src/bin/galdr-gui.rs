@@ -45,6 +45,11 @@ struct Settings {
     mic: Option<String>,
     /// Also play to the default speakers.
     listen: bool,
+    /// Suppress background noise on the PC (galdr::denoise).
+    denoise: bool,
+    /// How much quieter noise gets, in dB.
+    denoise_db: u32,
+    denoise_model: DenoiseModel,
     /// Size the buffer to the network; `latency_ms` is then only where it starts.
     auto_buffer: bool,
     latency_ms: u32,
@@ -62,6 +67,16 @@ struct Settings {
     cable_seen: bool,
 }
 
+/// Which model suppresses noise (galdr::denoise::Model). The aliases are names from test builds.
+#[derive(Clone, Copy, PartialEq, Serialize, Deserialize)]
+enum DenoiseModel {
+    #[serde(alias = "Light")]
+    Rnnoise,
+    #[serde(alias = "Strong", alias = "Clicks")]
+    DeepFilterNet,
+    Both,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -69,6 +84,9 @@ impl Default for Settings {
             typed_ip: String::new(),
             mic: None,
             listen: false,
+            denoise: false,
+            denoise_db: galdr::denoise::DEFAULT_LIMIT_DB,
+            denoise_model: DenoiseModel::Both,
             auto_buffer: true,
             latency_ms: DEFAULT_LATENCY_MS,
             control_port: DEFAULT_CONTROL_PORT,
@@ -83,6 +101,17 @@ impl Default for Settings {
 }
 
 impl Settings {
+    fn denoise_settings(&self) -> Option<galdr::denoise::Settings> {
+        self.denoise.then_some(galdr::denoise::Settings {
+            model: match self.denoise_model {
+                DenoiseModel::Rnnoise => galdr::denoise::Model::Rnnoise,
+                DenoiseModel::DeepFilterNet => galdr::denoise::Model::DeepFilterNet,
+                DenoiseModel::Both => galdr::denoise::Model::Both,
+            },
+            limit_db: self.denoise_db,
+        })
+    }
+
     /// `%APPDATA%\galdr\settings.json`.
     fn path() -> Option<PathBuf> {
         std::env::var_os("APPDATA").map(|d| PathBuf::from(d).join("galdr").join("settings.json"))
@@ -257,6 +286,7 @@ impl GaldrApp {
         config.usb = usb;
         config.outputs = outputs;
         config.monitor = self.settings.listen;
+        config.denoise = self.settings.denoise_settings();
         config.latency_ms = self.settings.latency_ms;
         config.adaptive_buffer = self.settings.auto_buffer;
         config.control_port = self.settings.control_port;
@@ -361,6 +391,75 @@ impl GaldrApp {
                         engine.set_monitor(self.settings.listen);
                     }
                     ui.end_row();
+
+                    ui.label("");
+                    let before = self.settings.denoise_settings();
+                    ui.checkbox(&mut self.settings.denoise, "Noise suppression")
+                        .on_hover_text(
+                            "Removes background noise on the PC, the same with any phone. Best \
+                             with Noise suppression off on the phone: with both, the voice can \
+                             come out dull.",
+                        );
+                    ui.end_row();
+
+                    if self.settings.denoise {
+                        ui.label("");
+                        ui.vertical(|ui| {
+                            segmented(
+                                ui,
+                                ui.spacing().interact_size.y,
+                                &mut self.settings.denoise_model,
+                                [
+                                    (
+                                        "RNNoise",
+                                        DenoiseModel::Rnnoise,
+                                        "+10 ms. Takes out steady background such as fans \
+                                         evenly; the voice stays as it is.",
+                                    ),
+                                    (
+                                        "DeepFilterNet",
+                                        DenoiseModel::DeepFilterNet,
+                                        "+10 ms. Separates the voice from the room much \
+                                         better, but the background can cut in and out.",
+                                    ),
+                                    (
+                                        "Both",
+                                        DenoiseModel::Both,
+                                        "+20 ms. RNNoise, then DeepFilterNet: an even \
+                                         background and an isolated voice.",
+                                    ),
+                                ],
+                            );
+                            let slider = egui::Slider::new(&mut self.settings.denoise_db, 6..=48)
+                                .text("quieter")
+                                .custom_formatter(|db, _| format!("{db} dB"));
+                            ui.add(slider).on_hover_text(
+                                "How much quieter the noise gets while you speak. More is \
+                                 cleaner, but the background can start to cut in and out.",
+                            );
+                            if self
+                                .engine
+                                .as_ref()
+                                .is_some_and(|e| e.stats().denoise_failed)
+                            {
+                                ui.label(
+                                    RichText::new(
+                                        "The DeepFilterNet model file is missing next to \
+                                         Galdr; RNNoise works without it",
+                                    )
+                                    .small()
+                                    .color(RED),
+                                );
+                            }
+                        });
+                        ui.end_row();
+                    }
+                    let after = self.settings.denoise_settings();
+                    if after != before
+                        && let Some(engine) = &self.engine
+                    {
+                        engine.set_denoise(after);
+                    }
                 });
         });
     }
@@ -442,7 +541,7 @@ impl GaldrApp {
                     ui,
                     height,
                     &mut self.settings.manual_ip,
-                    [("Search", false), ("Enter IP", true)],
+                    [("Search", false, ""), ("Enter IP", true, "")],
                 );
             });
             ui.add_space(4.0);
@@ -576,7 +675,7 @@ impl GaldrApp {
                                     ui,
                                     action.rect.height(),
                                     &mut self.settings.prefer_usb,
-                                    [("Wi-Fi", false), ("USB", true)],
+                                    [("Wi-Fi", false, ""), ("USB", true, "")],
                                 );
                             } else {
                                 let way = if phone.usb.is_some() { "USB" } else { "Wi-Fi" };
@@ -987,11 +1086,12 @@ fn segmented<T: PartialEq + Copy, const N: usize>(
     // Total height, to line up with the button beside it.
     height: f32,
     value: &mut T,
-    options: [(&str, T); N],
+    // Label, value and hover text (none when empty).
+    options: [(&str, T, &str); N],
 ) {
     let pad_x = 11.0;
     let inset = 2.0;
-    let galleys = options.map(|(label, _)| {
+    let galleys = options.map(|(label, _, _)| {
         egui::WidgetText::from(RichText::new(label).size(14.0)).into_galley(
             ui,
             Some(egui::TextWrapMode::Extend),
@@ -1015,13 +1115,16 @@ fn segmented<T: PartialEq + Copy, const N: usize>(
         egui::StrokeKind::Inside,
     );
     let mut x = rect.left() + inset;
-    for (i, ((_, option), galley)) in options.into_iter().zip(galleys).enumerate() {
+    for (i, ((_, option, hover), galley)) in options.into_iter().zip(galleys).enumerate() {
         let segment = egui::Rect::from_min_size(
             egui::pos2(x, rect.top() + inset),
             egui::vec2(widths[i], height),
         );
         x += widths[i];
-        let response = ui.interact(segment, pill.id.with(i), egui::Sense::click());
+        let mut response = ui.interact(segment, pill.id.with(i), egui::Sense::click());
+        if !hover.is_empty() {
+            response = response.on_hover_text(hover);
+        }
         if response.clicked() {
             *value = option;
         }

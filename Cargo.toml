@@ -9,6 +9,9 @@ license = "MIT"
 anyhow = "1.0.104"
 clap = { version = "4", features = ["derive"] }
 cpal = "0.18.2"
+# Noise suppression: DeepFilterNet 3; its models are files next to the program (src/denoise.rs).
+# Not on crates.io in a usable form (0.2 there cannot run a model), hence the git tag.
+deep_filter = { git = "https://github.com/Rikorose/DeepFilterNet", tag = "v0.5.6", default-features = false, features = ["tract"] }
 # glow (OpenGL) instead of the default wgpu: first frame ~200 ms instead of ~400 ms.
 eframe = { version = "0.37", default-features = false, features = [
     "glow",
@@ -19,6 +22,10 @@ eframe = { version = "0.37", default-features = false, features = [
     "links",
 ] }
 if-addrs = "0.15.0"
+# Light noise suppression (RNNoise in Rust, model built in).
+nnnoiseless = { version = "0.5.2", default-features = false }
+# The version deep_filter takes its audio in.
+ndarray = "0.15"
 opus-head-sys = "0.3.3"
 raw-window-handle = "0.6"
 serde = { version = "1.0.229", features = ["derive"] }
@@ -26,7 +33,7 @@ serde_json = "1.0.154"
 tray-icon = "0.26"
 # Already pulled in by cpal; used directly for the low-latency output.
 windows = { version = "0.62", features = ["Win32_Media_Audio", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Threading", "Win32_System_Variant", "Win32_Devices_FunctionDiscovery", "Win32_UI_Shell_PropertiesSystem"] }
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_Controls", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell"] }
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_Controls", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_UI_Shell", "Win32_Media"] }
 
 [build-dependencies]
 winresource = "0.1.34"

@@ -15,6 +15,7 @@ use anyhow::{Context, Result, bail};
 use crate::adb;
 use crate::audio::{self, PcmQueue, Playback};
 use crate::control::ControlSession;
+use crate::denoise::{self, Denoiser};
 use crate::jitter::Jitter;
 use crate::opus::{Decoder, MAX_FRAME_SAMPLES, SAMPLE_RATE};
 use crate::protocol::{DEFAULT_CONTROL_PORT, DEFAULT_MEDIA_PORT, parse_media};
@@ -44,6 +45,9 @@ pub struct Config {
     pub outputs: Vec<Output>,
     /// Also play to the default speakers; can be switched while running with [`Engine::set_monitor`].
     pub monitor: bool,
+    /// Noise suppression (see [`Denoiser`]), None for off; switchable while running with
+    /// [`Engine::set_denoise`].
+    pub denoise: Option<denoise::Settings>,
     /// Playback buffer; with `adaptive_buffer` only where it starts.
     pub latency_ms: u32,
     /// Size the buffer to how unevenly packets arrive (see [`Jitter`]).
@@ -61,6 +65,7 @@ impl Config {
             media_port: DEFAULT_MEDIA_PORT,
             outputs: vec![Output::Default],
             monitor: false,
+            denoise: None,
             latency_ms: 60,
             adaptive_buffer: true,
             usb: None,
@@ -106,6 +111,8 @@ pub struct Stats {
     pub target_ms: u32,
     /// Recent peak, 0.0..=1.0.
     pub level: f32,
+    /// Noise suppression is on but its model could not be loaded.
+    pub denoise_failed: bool,
 }
 
 impl Default for Stats {
@@ -120,6 +127,7 @@ impl Default for Stats {
             buffered_ms: 0,
             target_ms: 0,
             level: 0.0,
+            denoise_failed: false,
         }
     }
 }
@@ -127,6 +135,7 @@ impl Default for Stats {
 pub struct Engine {
     stop: Arc<AtomicBool>,
     monitor: Arc<AtomicBool>,
+    denoise: Arc<Mutex<Option<denoise::Settings>>>,
     stats: Arc<Mutex<Stats>>,
     thread: Option<JoinHandle<()>>,
 }
@@ -135,11 +144,13 @@ impl Engine {
     pub fn start(config: Config) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let monitor = Arc::new(AtomicBool::new(config.monitor));
+        let denoise = Arc::new(Mutex::new(config.denoise));
         let stats = Arc::new(Mutex::new(Stats::default()));
         let worker = Worker {
             config,
             stop: stop.clone(),
             monitor: monitor.clone(),
+            denoise: denoise.clone(),
             stats: stats.clone(),
         };
         let thread = thread::Builder::new()
@@ -149,6 +160,7 @@ impl Engine {
         Self {
             stop,
             monitor,
+            denoise,
             stats,
             thread: Some(thread),
         }
@@ -161,6 +173,11 @@ impl Engine {
     /// Turns playback to the default speakers on or off without reconnecting.
     pub fn set_monitor(&self, on: bool) {
         self.monitor.store(on, Ordering::Relaxed);
+    }
+
+    /// Turns noise suppression on (with these settings) or off without reconnecting.
+    pub fn set_denoise(&self, settings: Option<denoise::Settings>) {
+        *self.denoise.lock().unwrap() = settings;
     }
 
     /// Stops and waits for the worker, so a WAV file is complete afterwards.
@@ -186,6 +203,7 @@ struct Worker {
     config: Config,
     stop: Arc<AtomicBool>,
     monitor: Arc<AtomicBool>,
+    denoise: Arc<Mutex<Option<denoise::Settings>>>,
     stats: Arc<Mutex<Stats>>,
 }
 
@@ -313,6 +331,7 @@ impl Worker {
                 return Ok(());
             }
             self.sync_monitor(sinks);
+            sinks.set_denoise(*self.denoise.lock().unwrap());
             if !session.is_alive() {
                 bail!("phone closed the control connection");
             }
@@ -355,10 +374,7 @@ impl Worker {
             }
 
             let (peak, bad) = match decoder.decode(Some(packet.opus), &mut pcm) {
-                Ok(got) => {
-                    sinks.deliver(&pcm[..got])?;
-                    (pcm[..got].iter().fold(0f32, |m, s| m.max(s.abs())), 0)
-                }
+                Ok(got) => (sinks.deliver(&pcm[..got])?, 0),
                 Err(_) => (0.0, 1),
             };
             if peak > SILENCE_PEAK {
@@ -374,6 +390,7 @@ impl Worker {
                 s.buffered_ms = buffered;
                 s.target_ms = target;
                 s.level = (s.level * LEVEL_DECAY).max(peak.min(1.0));
+                s.denoise_failed = sinks.denoiser.as_ref().is_some_and(|(d, _)| d.failed());
                 s.state = if silent {
                     State::Silent
                 } else {
@@ -466,6 +483,9 @@ struct Sinks {
     wav: Option<WavWriter>,
     /// Current buffer target of every queue.
     latency_ms: u32,
+    /// Present while noise suppression is on, with the settings it has.
+    denoiser: Option<(Denoiser, denoise::Settings)>,
+    cleaned: Vec<f32>,
 }
 
 impl Sinks {
@@ -486,7 +506,30 @@ impl Sinks {
         }
     }
 
-    fn deliver(&mut self, pcm: &[f32]) -> Result<()> {
+    fn set_denoise(&mut self, want: Option<denoise::Settings>) {
+        match (&mut self.denoiser, want) {
+            (Some((_, have)), Some(want)) if *have == want => {}
+            // Another model is another Denoiser; the rest it takes as it runs.
+            (Some((d, have)), Some(want)) if d.model() == want.model => {
+                d.tune(want);
+                *have = want;
+            }
+            (_, want) => self.denoiser = want.map(|w| (Denoiser::new(w), w)),
+        }
+    }
+
+    /// Plays (and records) `pcm`, cleaned first when noise suppression is on; returns the peak
+    /// of what went out.
+    fn deliver(&mut self, pcm: &[f32]) -> Result<f32> {
+        let mut cleaned = std::mem::take(&mut self.cleaned);
+        cleaned.clear();
+        let pcm = match &mut self.denoiser {
+            Some((d, _)) => {
+                d.process(pcm, &mut cleaned);
+                &cleaned[..]
+            }
+            None => pcm,
+        };
         for q in self
             .queues
             .iter()
@@ -497,6 +540,8 @@ impl Sinks {
         if let Some(w) = &mut self.wav {
             w.write(pcm)?;
         }
-        Ok(())
+        let peak = pcm.iter().fold(0f32, |m, s| m.max(s.abs()));
+        self.cleaned = cleaned;
+        Ok(peak)
     }
 }

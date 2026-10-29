@@ -5,6 +5,7 @@ pub mod audio;
 #[cfg(windows)]
 pub mod cable;
 pub mod control;
+pub mod denoise;
 pub mod discovery;
 pub mod engine;
 pub mod jitter;
