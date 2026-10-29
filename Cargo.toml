@@ -2,7 +2,7 @@
 name = "galdr"
 version = "0.1.0"
 edition = "2024"
-description = "Use your phone as a PC microphone over Wi-Fi"
+description = "Use your phone as a PC microphone over Wi-Fi or USB"
 license = "MIT"
 
 [dependencies]

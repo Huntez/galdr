@@ -5,3 +5,7 @@ local.properties
 .idea/
 *.iml
 .cxx/
+# The release key and its passwords.
+keystore.properties
+*.jks
+*.keystore

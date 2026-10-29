@@ -3,7 +3,7 @@
   galdr
 </h1>
 
-<p align="center">Use your phone as a PC microphone over Wi-Fi.</p>
+<p align="center">Use your phone as a PC microphone over Wi-Fi or USB.</p>
 
 <p align="center">
   <img alt="PC: Windows 10/11" src="https://img.shields.io/badge/PC-Windows%2010%2F11-0078D6">
@@ -38,7 +38,16 @@ microphone for other programs.
 
 ## Setup
 
-### 1. Install a virtual microphone (once)
+### 1. Download
+
+From [Releases](https://github.com/Huntez/galdr/releases):
+
+- **`galdr-<version>.apk`** for the phone: open it there and allow installing from this
+  source when Android asks.
+- **`galdr-<version>-windows-x64.zip`** for the PC: unzip anywhere and run `galdr-gui.exe`.
+  Windows SmartScreen may warn about an unknown publisher: *More info* → *Run anyway*.
+
+### 2. Install a virtual microphone (once)
 
 Windows has no way for a program to create a microphone by itself, so Galdr needs a driver
 that provides one. **Recommended: [VB-CABLE](https://vb-audio.com/Cable/)** (free, donationware).
@@ -50,7 +59,7 @@ that provides one. **Recommended: [VB-CABLE](https://vb-audio.com/Cable/)** (fre
 You now have **CABLE Input** (Galdr plays into it) and **CABLE Output** (the microphone other
 programs see). Other virtual cables work too; Galdr lists the ones it finds.
 
-### 2. Connect
+### 3. Connect
 
 1. **Phone:** open Galdr and press **Start**.
 2. **PC:** run `galdr-gui.exe`. Your phone shows up under *Phones* within a few seconds (or
@@ -68,7 +77,8 @@ more. Galdr talks to the phone through **adb**, Android's USB debugging tool.
 
 1. **Phone:** turn on *Developer options* (Settings → About phone → tap *Build number* seven
    times), then *Developer options* → **USB debugging**.
-2. **PC:** get adb: unzip [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)
+2. **PC:** the Windows download already has adb next to `galdr-gui.exe`. When building
+   Galdr yourself, unzip [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)
    and put `adb.exe` (with the two `AdbWin*.dll` next to it) beside `galdr-gui.exe`, or anywhere
    on `PATH`.
 3. Plug the phone in and allow USB debugging when it asks. Press **Start** in Galdr on the
@@ -91,6 +101,26 @@ The phone captures 48 kHz mono and sends Opus (up to 256 kbit/s); the PC decodes
 float. Through VB-CABLE the path is deeper than 16 bits: a −110 dBFS test tone, below 16-bit
 resolution, arrives intact. Check with
 `cargo run --release --example loopback -- "<cable input>" "<cable output>" 0.000003`.
+
+## Delay
+
+The phone sends a packet every 10 ms and the PC keeps a small buffer against packets that
+arrive late. Galdr sizes that buffer to the connection by itself and shows it in the status
+as *buffer now/target ms*:
+
+| Connection | Buffer, typical |
+|---|---|
+| USB cable | 15–25 ms |
+| Wi-Fi | 40–90 ms, depending on the router and how busy the air is |
+
+VB-CABLE adds about 45 ms on top of that on its own, whatever its settings.
+
+To tune it:
+
+- **Phone → Advanced → Packet length:** 5, 10 (default) or 20 ms. Shorter packets mean less
+  delay but more of them; pick 20 if the sound stutters on weak Wi-Fi.
+- **PC → Advanced → Buffer:** untick *Auto* to set a fixed buffer instead (also
+  `--latency-ms` with `--fixed-buffer` on the command line).
 
 ## Command line
 
@@ -127,6 +157,12 @@ libopus comes as a git submodule, so clone with `--recursive` or run
 cd android
 gradlew assembleDebug
 ```
+
+**Releases** are built by GitHub Actions ([release.yml](.github/workflows/release.yml)): push a
+tag such as `v0.1.0` (matching `Cargo.toml` and `versionName`) and it drafts a release with the
+Windows zip (adb included) and the signed APK. The APK's key comes from repository secrets; for
+local release builds put it in `android/keystore.properties` (`storeFile`, `storePassword`,
+`keyAlias`, `keyPassword`), which git ignores. Without a key, release builds use the debug key.
 
 ## Protocol
 

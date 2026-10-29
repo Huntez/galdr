@@ -1,6 +1,24 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
+}
+
+// The release key: android/keystore.properties on the PC (never committed), or GALDR_KEYSTORE*
+// environment variables in CI. Without either, release builds use the debug key.
+val releaseKey: Map<String, String>? = run {
+    val file = rootProject.file("keystore.properties")
+    val props = Properties()
+    if (file.exists()) file.inputStream().use(props::load)
+    val get = { key: String, env: String -> props.getProperty(key) ?: System.getenv(env) }
+    val values = mapOf(
+        "storeFile" to get("storeFile", "GALDR_KEYSTORE"),
+        "storePassword" to get("storePassword", "GALDR_KEYSTORE_PASSWORD"),
+        "keyAlias" to get("keyAlias", "GALDR_KEY_ALIAS"),
+        "keyPassword" to get("keyPassword", "GALDR_KEY_PASSWORD"),
+    )
+    if (values.values.all { !it.isNullOrEmpty() }) values.mapValues { it.value!! } else null
 }
 
 android {
@@ -28,14 +46,23 @@ android {
         }
     }
 
+    signingConfigs {
+        if (releaseKey != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseKey.getValue("storeFile"))
+                storePassword = releaseKey.getValue("storePassword")
+                keyAlias = releaseKey.getValue("keyAlias")
+                keyPassword = releaseKey.getValue("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
-            // Signed with the local debug key so it can be sideloaded for testing.
-            // Replace with a real release key before publishing anywhere.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
