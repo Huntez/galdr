@@ -57,7 +57,10 @@ that provides one. **Recommended: [VB-CABLE](https://vb-audio.com/Cable/)** (fre
 3. Restart the PC.
 
 You now have **CABLE Input** (Galdr plays into it) and **CABLE Output** (the microphone other
-programs see). Other virtual cables work too; Galdr lists the ones it finds.
+programs see). Galdr picks it by itself; other virtual cables work too.
+
+VB-CABLE keeps a large buffer by default. Galdr offers to lower it under *Microphone*
+(**Lower it**): Windows asks for administrator rights, and the cable restarts with less delay.
 
 ### 3. Connect
 
@@ -113,7 +116,7 @@ as *buffer now/target ms*:
 | USB cable | 15–25 ms |
 | Wi-Fi | 40–90 ms, depending on the router and how busy the air is |
 
-VB-CABLE adds about 45 ms on top of that on its own, whatever its settings.
+VB-CABLE adds about 45 ms on top of that on its own; *Lower it* (see Setup) trims a few ms more.
 
 To tune it:
 
@@ -129,11 +132,13 @@ galdr find
 galdr devices
 galdr connect 192.168.1.20 --device "CABLE Input" --monitor
 galdr connect usb --device "CABLE Input"
+galdr tune-cable
 ```
 
 `find` lists phones that pressed Start, and those on USB. `usb` connects to the phone on the
 cable (`usb:<serial>` picks one of several). `--device <name>` plays into a device (part of its
 name is enough), `--monitor` also plays to the speakers. See `galdr connect --help`.
+`tune-cable` lowers VB-CABLE's buffer, like *Lower it* in the window.
 
 ## Plans
 

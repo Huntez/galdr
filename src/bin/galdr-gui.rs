@@ -4,8 +4,8 @@
 
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -30,6 +30,8 @@ const SPEAKING_ON: f32 = 0.04;
 const SPEAKING_OFF: f32 = 0.015;
 /// Command-line flag used by the autostart entry: start hidden in the tray.
 const TRAY_ARG: &str = "--tray";
+/// Run as administrator by "Lower it": set VB-CABLE's buffer (galdr::cable::tune) and exit.
+const TUNE_CABLE_ARG: &str = "--tune-cable";
 
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -56,6 +58,8 @@ struct Settings {
     /// A phone reachable both ways connects over USB (steadier, less delay) unless Wi-Fi is picked.
     prefer_usb: bool,
     close_to_tray: bool,
+    /// A virtual cable was there on some run; until then one that appears is picked by itself.
+    cable_seen: bool,
 }
 
 impl Default for Settings {
@@ -73,6 +77,7 @@ impl Default for Settings {
             close_to_tray: true,
             manual_ip: false,
             prefer_usb: true,
+            cable_seen: false,
         }
     }
 }
@@ -166,6 +171,7 @@ struct GaldrApp {
     discovery: Option<Discovery>,
     /// What the search found, refreshed once per frame.
     phones: Vec<Phone>,
+    cable: CableTune,
 }
 
 impl GaldrApp {
@@ -207,6 +213,7 @@ impl GaldrApp {
             // Keep "Listen to myself" if it was on; without a cable it is the only output.
             settings.listen = (forgotten && settings.listen) || settings.mic.is_none();
         }
+        adopt_new_cable(&mut settings, &devices);
         let mut app = Self {
             saved: None,
             settings,
@@ -221,6 +228,7 @@ impl GaldrApp {
             start_hidden,
             discovery: None,
             phones: Vec::new(),
+            cable: CableTune::check(),
         };
         if app.settings.connect_on_start {
             app.connect();
@@ -328,6 +336,7 @@ impl GaldrApp {
                                 .clicked()
                             {
                                 self.devices = Devices::scan();
+                                adopt_new_cable(&mut self.settings, &self.devices);
                             }
                         })
                     });
@@ -336,6 +345,12 @@ impl GaldrApp {
                     ui.label("");
                     self.mic_hint(ui);
                     ui.end_row();
+
+                    if self.cable_ui_shown() {
+                        ui.label("");
+                        self.cable_ui(ui, locked);
+                        ui.end_row();
+                    }
 
                     ui.label("");
                     if ui
@@ -628,7 +643,9 @@ impl GaldrApp {
                 ui.vertical(|ui| {
                     hint(
                         ui,
-                        "No virtual microphone found. Install a virtual cable:".into(),
+                        "No virtual microphone found. Install VB-CABLE (its setup as \
+                         administrator, then restart the PC):"
+                            .into(),
                     );
                     ui.hyperlink_to(
                         RichText::new("VB-CABLE").small(),
@@ -641,6 +658,118 @@ impl GaldrApp {
             }
         }
     }
+}
+
+/// A virtual cable installed since the last run is picked, as on the first run, and replaces
+/// Listen to myself, which was only on for want of one.
+fn adopt_new_cable(settings: &mut Settings, devices: &Devices) {
+    let Some(cable) = devices.mics.first() else {
+        return;
+    };
+    if !settings.cable_seen && settings.mic.is_none() {
+        settings.mic = Some(cable.key.clone());
+        settings.listen = false;
+    }
+    settings.cable_seen = true;
+}
+
+/// VB-CABLE's own buffer (see galdr::cable): offered to lower when it is at the large default.
+enum CableTune {
+    Fine,
+    Large,
+    /// Waiting for the elevated copy: a message for the user, or an error.
+    Waiting(mpsc::Receiver<Result<String, String>>),
+    Done(String),
+    Failed(String),
+}
+
+impl CableTune {
+    fn check() -> Self {
+        #[cfg(windows)]
+        if galdr::cable::needs_tuning() {
+            return Self::Large;
+        }
+        Self::Fine
+    }
+}
+
+impl GaldrApp {
+    /// Below the microphone when it is VB-CABLE, or while there is something to report.
+    fn cable_ui_shown(&self) -> bool {
+        let vb_cable = self
+            .settings
+            .mic
+            .as_deref()
+            .and_then(|k| self.devices.mic(k))
+            .is_some_and(|m| m.microphone.contains("VB-Audio Virtual Cable"));
+        match self.cable {
+            CableTune::Fine => false,
+            CableTune::Large => vb_cable,
+            _ => true,
+        }
+    }
+
+    fn cable_ui(&mut self, ui: &mut egui::Ui, locked: bool) {
+        let small = |text: &str| RichText::new(text).small();
+        if let CableTune::Waiting(rx) = &self.cable {
+            match rx.try_recv() {
+                Ok(Ok(done)) => {
+                    // The cable restarted: its devices are new to Windows.
+                    self.devices = Devices::scan();
+                    self.cable = CableTune::Done(done);
+                }
+                Ok(Err(e)) if e == "cancelled" => self.cable = CableTune::Large,
+                Ok(Err(e)) => self.cable = CableTune::Failed(e),
+                Err(mpsc::TryRecvError::Empty) => {
+                    ui.ctx().request_repaint_after(Duration::from_millis(200));
+                }
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    self.cable = CableTune::Failed("Could not change the VB-CABLE setting".into());
+                }
+            }
+        }
+        ui.horizontal_wrapped(|ui| match &self.cable {
+            CableTune::Fine => {}
+            CableTune::Large => {
+                ui.label(small("VB-CABLE adds extra delay by default.").weak());
+                let lower = ui
+                    .add_enabled(!locked, egui::Button::new(small("Lower it")))
+                    .on_hover_text("Asks Windows for administrator rights, then restarts VB-CABLE")
+                    .on_disabled_hover_text("Disconnect first: VB-CABLE restarts");
+                if lower.clicked() {
+                    self.cable = CableTune::Waiting(lower_cable_latency());
+                }
+            }
+            CableTune::Waiting(_) => {
+                ui.label(small("Waiting for Windows…").weak());
+            }
+            CableTune::Done(text) => {
+                ui.label(small(text).color(GREEN));
+            }
+            CableTune::Failed(text) => {
+                ui.label(small(text).color(RED));
+            }
+        });
+    }
+}
+
+/// Runs Galdr again as administrator to set VB-CABLE's buffer; the answer comes on the channel.
+fn lower_cable_latency() -> mpsc::Receiver<Result<String, String>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        #[cfg(windows)]
+        let result = match galdr::cable::tune_elevated(TUNE_CABLE_ARG) {
+            Ok(galdr::cable::Tuned::Restarted) => Ok("Done: VB-CABLE delay lowered.".into()),
+            Ok(galdr::cable::Tuned::RebootNeeded) => {
+                Ok("Saved. Restart the PC to apply it.".into())
+            }
+            Err(e) => Err(e.to_string()),
+        };
+        #[cfg(not(windows))]
+        let result = Err("Only on Windows".into());
+        let _ = tx.send(result);
+    });
+    rx
 }
 
 /// "CABLE Output (VB-Audio Virtual Cable)" -> "VB-Audio Virtual Cable".
@@ -1099,6 +1228,10 @@ fn tray_icon_image(look: TrayLook) -> tray_icon::Icon {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(windows)]
+    if std::env::args().any(|a| a == TUNE_CABLE_ARG) {
+        std::process::exit(galdr::cable::exit_code(&galdr::cable::tune()));
+    }
     if !system::claim_single_instance() {
         return Ok(()); // the running copy shows its window instead
     }

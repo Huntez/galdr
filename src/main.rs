@@ -17,7 +17,7 @@ use galdr::protocol::{DEFAULT_CONTROL_PORT, DEFAULT_MEDIA_PORT};
 const STATS_PERIOD: Duration = Duration::from_secs(5);
 
 #[derive(Parser)]
-#[command(version, about = "Use your phone as a PC microphone over Wi-Fi")]
+#[command(version, about = "Use your phone as a PC microphone over Wi-Fi or USB")]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -31,6 +31,9 @@ enum Command {
     Devices,
     /// List Galdr phones on the local network and on USB (press Start in the phone app first)
     Find,
+    /// Lower VB-CABLE's own buffer (less delay); asks for administrator rights
+    #[cfg(windows)]
+    TuneCable,
 }
 
 #[derive(clap::Args)]
@@ -106,7 +109,34 @@ fn main() -> Result<()> {
             }
             Ok(())
         }
+        #[cfg(windows)]
+        Command::TuneCable => tune_cable(),
     }
+}
+
+#[cfg(windows)]
+fn tune_cable() -> Result<()> {
+    use galdr::cable::{self, NeedsAdmin, Tuned};
+    if !cable::installed() {
+        anyhow::bail!("VB-CABLE is not installed");
+    }
+    // Without administrator rights this asks Windows to run the same command elevated.
+    let result = match cable::tune() {
+        Err(e) if e.is::<NeedsAdmin>() => cable::tune_elevated("tune-cable"),
+        result => result,
+    };
+    match &result {
+        Ok(Tuned::Restarted) => println!(
+            "VB-CABLE buffer set to {} samples and the cable restarted.",
+            cable::LOW_LATENCY
+        ),
+        Ok(Tuned::RebootNeeded) => println!(
+            "VB-CABLE buffer set to {} samples; restart the PC to apply it.",
+            cable::LOW_LATENCY
+        ),
+        Err(e) => eprintln!("error: {e}"),
+    }
+    std::process::exit(cable::exit_code(&result));
 }
 
 fn connect(args: ConnectArgs) -> Result<()> {

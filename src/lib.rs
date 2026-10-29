@@ -2,6 +2,8 @@
 
 pub mod adb;
 pub mod audio;
+#[cfg(windows)]
+pub mod cable;
 pub mod control;
 pub mod discovery;
 pub mod engine;
