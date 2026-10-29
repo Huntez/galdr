@@ -9,6 +9,9 @@ use cpal::{FromSample, SampleFormat, SizedSample, Stream, StreamConfig};
 
 use crate::opus::SAMPLE_RATE;
 
+/// Peak below this (about -50 dBFS) counts as a pause that may be skipped when the queue is full.
+const QUIET: f32 = 0.003;
+
 /// 48 kHz mono samples shared between the network thread and the audio callback.
 pub struct PcmQueue {
     inner: Mutex<QueueState>,
@@ -34,6 +37,13 @@ impl PcmQueue {
 
     pub fn push(&self, pcm: &[f32]) {
         let mut q = self.inner.lock().unwrap();
+        // Wi-Fi delivers packets in bursts, which leaves the queue well above its target. A
+        // near-silent frame (a pause between words) is then simply skipped: inaudible, and the
+        // queue is back on target within one pause instead of slowly through the rate nudge.
+        let above = q.samples.len() + pcm.len() > self.target + self.target / 4;
+        if above && !q.priming && pcm.iter().all(|s| s.abs() < QUIET) {
+            return;
+        }
         q.samples.extend(pcm);
         // Last resort when the phone runs far ahead (e.g. after a hiccup); normally the rate
         // nudge in `Resampler` keeps the queue near its target.
