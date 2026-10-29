@@ -58,11 +58,16 @@ add messages.
 | `0x02` | `WELCOME` | phone → PC | `GLDR`, version u8, codec u8, sample rate u32, channels u8, frame ms u8, phone name |
 | `0x03` | `REJECT` | phone → PC | reason text; the phone then closes the connection |
 | `0x04` | `PING` | both | — |
+| `0x05` | `MEDIA` | phone → PC | one media packet, exactly as on the media channel (below) |
 
 `HELLO` is the first message on a connection. The phone answers `WELCOME`, or `REJECT` when it
 does not speak the PC's version. Codecs: `1` = Opus. Version 1 phones send Opus, 48000 Hz,
 1 channel, in frames of 5, 10 or 20 ms (every packet of a session has the announced length; the PC
 uses it to conceal lost packets and to size its buffer).
+
+Media port `0` in `HELLO` asks the phone to send the audio as `MEDIA` messages on the control
+connection instead of UDP datagrams. The PC does this over USB, where adb forwards a single TCP
+port (`adb forward tcp:<local> tcp:47800`) and nothing else.
 
 Example (PC "DESKTOP", media port 47801; phone "Pixel 7"):
 

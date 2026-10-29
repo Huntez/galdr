@@ -13,22 +13,26 @@ object Status {
         private set
     @Volatile var error: String? = null
         private set
+    /** The PC is connected over USB (adb) rather than the network. */
+    @Volatile var usb = false
+        private set
     /** Peak of the last captured block, 0..1. */
     @Volatile var level = 0f
 
     private val main = Handler(Looper.getMainLooper())
     private val listeners = mutableListOf<() -> Unit>()
 
-    fun set(phase: Phase, peer: String? = null, error: String? = null) {
+    fun set(phase: Phase, peer: String? = null, error: String? = null, usb: Boolean = false) {
         this.phase = phase
         this.peer = peer
         this.error = error
+        this.usb = usb
         if (phase != Phase.STREAMING) level = 0f
         main.post { listeners.toList().forEach { it() } }
     }
 
     /** Reports an error without changing the phase. */
-    fun fail(message: String) = set(phase, peer, message)
+    fun fail(message: String) = set(phase, peer, message, usb)
 
     /** Main thread only. */
     fun listen(listener: () -> Unit) {

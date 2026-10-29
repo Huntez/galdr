@@ -23,6 +23,14 @@ import androidx.compose.runtime.withFrameMillis
 import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
+    /** Bumped on every return to the app: settings such as USB debugging may have changed. */
+    private var resumes by mutableIntStateOf(0)
+
+    override fun onResume() {
+        super.onResume()
+        resumes++
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -75,6 +83,7 @@ class MainActivity : ComponentActivity() {
         version // re-read Status below whenever the service reports a change
         // A system call: only when the status changes, not on every recomposition.
         val address = remember(version) { Wifi.address(this) }
+        val usbDebugging = remember(version, resumes) { Device.usbDebugging(this) }
         Screen(
             ScreenState(
                 phase = Status.phase,
@@ -82,6 +91,8 @@ class MainActivity : ComponentActivity() {
                 peer = Status.peer,
                 error = Status.error,
                 address = address,
+                overUsb = Status.usb,
+                usbDebugging = usbDebugging,
                 level = { level },
                 processed = processed,
                 bitrate = bitrate,

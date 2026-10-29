@@ -2,7 +2,7 @@
 
 #![windows_subsystem = "windows"]
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -34,6 +34,7 @@ const TRAY_ARG: &str = "--tray";
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 struct Settings {
+    /// The phone to connect to: its IP, or `usb:<serial>` (see `Phone::key`).
     phone: String,
     /// Output device galdr sends audio to so other programs hear it as a microphone
     /// (usually a virtual cable).
@@ -218,9 +219,12 @@ impl GaldrApp {
     }
 
     fn connect(&mut self) {
-        let phone: IpAddr = match self.settings.phone.trim().parse() {
-            Ok(ip) => ip,
-            Err(_) => {
+        let chosen = self.settings.phone.trim();
+        let usb = chosen.strip_prefix("usb:").map(str::to_string);
+        let phone: IpAddr = match (&usb, chosen.parse()) {
+            (Some(_), _) => Ipv4Addr::LOCALHOST.into(),
+            (None, Ok(ip)) => ip,
+            (None, Err(_)) => {
                 self.error = Some("Pick your phone or enter the IP shown in Galdr on it".into());
                 return;
             }
@@ -232,6 +236,7 @@ impl GaldrApp {
         }
         self.error = None;
         let mut config = Config::new(phone);
+        config.usb = usb;
         config.outputs = outputs;
         config.monitor = self.settings.listen;
         config.latency_ms = self.settings.latency_ms;
@@ -423,6 +428,7 @@ impl GaldrApp {
                 details: details.into(),
                 addr,
                 control_port: self.settings.control_port,
+                usb: None,
             };
             let mut cards = Vec::new();
             if self.settings.manual_ip {
@@ -451,8 +457,8 @@ impl GaldrApp {
                 }
             } else {
                 cards = self.phones.clone();
-                if let Some(addr) =
-                    chosen_addr.filter(|a| connected && !cards.iter().any(|p| p.addr == *a))
+                if let Some(addr) = chosen_addr
+                    .filter(|a| connected && !cards.iter().any(|p| p.key() == a.to_string()))
                 {
                     cards.push(live_card(addr, ""));
                 }
@@ -462,7 +468,7 @@ impl GaldrApp {
             }
 
             for phone in &cards {
-                let this_one = phone.addr.to_string() == chosen;
+                let this_one = phone.key() == chosen;
                 let live = stats.filter(|_| this_one);
                 let stroke = if live.is_some() {
                     egui::Stroke::new(1.5, ACCENT)
@@ -478,9 +484,17 @@ impl GaldrApp {
                         ui.horizontal(|ui| {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(&phone.name).size(16.0).strong());
-                                let mut line = phone.addr.to_string();
+                                // A USB phone's address is just localhost: its details say USB.
+                                let mut line = match phone.usb {
+                                    Some(_) => String::new(),
+                                    None => phone.addr.to_string(),
+                                };
                                 if !phone.details.is_empty() {
-                                    line = format!("{}   ·   {line}", phone.details);
+                                    line = if line.is_empty() {
+                                        phone.details.clone()
+                                    } else {
+                                        format!("{}   ·   {line}", phone.details)
+                                    };
                                 }
                                 ui.label(RichText::new(line).small().weak());
                             });
@@ -498,7 +512,7 @@ impl GaldrApp {
                                         let connect = accent_button("Connect");
                                         // One phone at a time.
                                         if ui.add_enabled(stats.is_none(), connect).clicked() {
-                                            self.settings.phone = phone.addr.to_string();
+                                            self.settings.phone = phone.key();
                                             self.settings.control_port = phone.control_port;
                                             self.connect();
                                         }
@@ -532,7 +546,7 @@ impl GaldrApp {
         if self.settings.phone.trim().is_empty()
             && let [only] = self.phones.as_slice()
         {
-            self.settings.phone = only.addr.to_string();
+            self.settings.phone = only.key();
             self.settings.control_port = only.control_port;
         }
         ctx.request_repaint_after(Duration::from_secs(1));

@@ -10,6 +10,10 @@ object Device {
         android.provider.Settings.Global.getString(context.contentResolver, android.provider.Settings.Global.DEVICE_NAME)
             ?: Build.MODEL
 
+    /** USB debugging is on, so a PC can reach the phone over a cable through adb. */
+    fun usbDebugging(context: Context): Boolean =
+        android.provider.Settings.Global.getInt(context.contentResolver, android.provider.Settings.Global.ADB_ENABLED, 0) == 1
+
     /** Shown on the PC under the name: the model when the phone was renamed, and Android. */
     fun details(name: String): String {
         val android = "Android ${Build.VERSION.RELEASE}"

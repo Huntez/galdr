@@ -1,13 +1,14 @@
 //! galdr command line.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+use galdr::adb;
 use galdr::audio;
 use galdr::discovery;
 use galdr::engine::{Config, Engine, Output, State};
@@ -24,18 +25,19 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Connect to the phone over Wi-Fi and play its microphone
+    /// Connect to the phone over Wi-Fi or USB and play its microphone
     Connect(ConnectArgs),
     /// List audio output devices
     Devices,
-    /// List Galdr phones on the local network (press Start in the phone app first)
+    /// List Galdr phones on the local network and on USB (press Start in the phone app first)
     Find,
 }
 
 #[derive(clap::Args)]
 struct ConnectArgs {
-    /// Phone IP address shown in the Galdr phone app
-    phone: IpAddr,
+    /// Phone IP address shown in the Galdr phone app, or `usb` (the phone on the cable) or
+    /// `usb:<serial>` (one of several, see `galdr find`)
+    phone: String,
     #[arg(long, default_value_t = DEFAULT_CONTROL_PORT)]
     control_port: u16,
     /// Local UDP port the phone streams audio to
@@ -69,13 +71,22 @@ fn main() -> Result<()> {
         Command::Connect(args) => connect(args),
         Command::Find => {
             let phones = discovery::find(Duration::from_secs(2))?;
-            if phones.is_empty() {
+            let usb = adb::devices();
+            if phones.is_empty() && usb.is_empty() {
                 println!(
                     "No phone found. Press Start in Galdr on the phone, same Wi-Fi as this PC."
                 );
             }
             for p in phones {
                 println!("{}  {}  (port {})", p.addr, p.name, p.control_port);
+            }
+            for d in usb {
+                let note = if d.authorized {
+                    ""
+                } else {
+                    "  (allow USB debugging on the phone)"
+                };
+                println!("usb:{}  {}{note}", d.serial, d.model);
             }
             Ok(())
         }
@@ -99,6 +110,24 @@ fn main() -> Result<()> {
 }
 
 fn connect(args: ConnectArgs) -> Result<()> {
+    let (phone, usb) = match args.phone.as_str() {
+        "usb" => {
+            let serial = adb::devices()
+                .into_iter()
+                .find(|d| d.authorized)
+                .context("no phone on USB with USB debugging allowed (see `galdr find`)")?
+                .serial;
+            (Ipv4Addr::LOCALHOST.into(), Some(serial))
+        }
+        p => match p.strip_prefix("usb:") {
+            Some(serial) => (Ipv4Addr::LOCALHOST.into(), Some(serial.to_string())),
+            None => (
+                p.parse::<IpAddr>()
+                    .with_context(|| format!("{p:?} is neither an IP address nor usb"))?,
+                None,
+            ),
+        },
+    };
     let mut outputs = Vec::new();
     let mut monitor = false;
     if !args.no_play {
@@ -110,7 +139,8 @@ fn connect(args: ConnectArgs) -> Result<()> {
         outputs.push(main);
     }
     let engine = Engine::start(Config {
-        phone: args.phone,
+        phone,
+        usb,
         control_port: args.control_port,
         media_port: args.media_port,
         outputs,

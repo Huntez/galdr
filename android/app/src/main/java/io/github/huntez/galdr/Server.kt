@@ -20,9 +20,9 @@ class Server(
     /** Opus frame length for the next session, read when a PC connects. */
     private val frameMs: () -> Int,
     /** Starts streaming to the PC with the given frame length. */
-    private val openStream: (InetSocketAddress, Int) -> AutoCloseable,
-    /** The PC's name and address while one is connected, null when it left. */
-    private val onPeer: (String?) -> Unit,
+    private val openStream: (MediaLink, Int) -> AutoCloseable,
+    /** The PC's name and address while one is connected (null when it left), and if over USB. */
+    private val onPeer: (peer: String?, usb: Boolean) -> Unit,
 ) : AutoCloseable {
     private val listener = ServerSocket().apply {
         reuseAddress = true
@@ -55,9 +55,9 @@ class Server(
      * The previous PC's session ends on its own thread; close its stream here first, so two
      * streams never hold the microphone at once.
      */
-    private fun startStream(target: InetSocketAddress, frameMs: Int): AutoCloseable = synchronized(streamLock) {
+    private fun startStream(link: MediaLink, frameMs: Int): AutoCloseable = synchronized(streamLock) {
         stream?.close()
-        openStream(target, frameMs).also { stream = it }
+        openStream(link, frameMs).also { stream = it }
     }
 
     private fun stopStream(mine: AutoCloseable) = synchronized(streamLock) {
@@ -74,12 +74,13 @@ class Server(
             socket.soTimeout = IDLE_TIMEOUT_MS
             val input = DataInputStream(socket.getInputStream().buffered())
             val output = DataOutputStream(socket.getOutputStream().buffered())
-            fun send(type: Int, payload: ByteArray = ByteArray(0)) = synchronized(output) {
-                output.writeByte(type)
-                output.writeShort(payload.size)
-                output.write(payload)
-                output.flush()
-            }
+            fun send(type: Int, payload: ByteArray = ByteArray(0), length: Int = payload.size) =
+                synchronized(output) {
+                    output.writeByte(type)
+                    output.writeShort(length)
+                    output.write(payload, 0, length)
+                    output.flush()
+                }
 
             val (type, hello) = read(input)
             if (type != Protocol.HELLO || !Protocol.hasMagic(hello) || hello.size < 7) {
@@ -94,8 +95,20 @@ class Server(
 
             val frameMs = frameMs()
             send(Protocol.WELCOME, welcome(frameMs))
-            stream = startStream(InetSocketAddress(peer, mediaPort), frameMs)
-            onPeer("$pcName (${peer.hostAddress})")
+            // Port 0: adb forwards only this TCP connection (USB), so the audio comes along.
+            val link = if (mediaPort == 0) {
+                MediaLink.InBand { packet, length ->
+                    // A failed write ends the session through the read loop below.
+                    try {
+                        send(Protocol.MEDIA_INBAND, packet, length)
+                    } catch (_: IOException) {
+                    }
+                }
+            } else {
+                MediaLink.Udp(InetSocketAddress(peer, mediaPort))
+            }
+            stream = startStream(link, frameMs)
+            onPeer(if (mediaPort == 0) "$pcName (USB)" else "$pcName (${peer.hostAddress})", mediaPort == 0)
             pinger = thread(name = "galdr-ping") {
                 try {
                     while (!socket.isClosed) {
@@ -116,7 +129,7 @@ class Server(
             synchronized(this) {
                 if (session === socket) {
                     session = null
-                    if (!listener.isClosed) onPeer(null)
+                    if (!listener.isClosed) onPeer(null, false)
                 }
             }
         }

@@ -8,7 +8,7 @@
 <p align="center">
   <img alt="PC: Windows 10/11" src="https://img.shields.io/badge/PC-Windows%2010%2F11-0078D6">
   <img alt="Phone: Android 11+" src="https://img.shields.io/badge/phone-Android%2011%2B-3DDC84?logo=android&logoColor=white">
-  <img alt="Connection: Wi-Fi" src="https://img.shields.io/badge/connection-Wi--Fi-555555">
+  <img alt="Connection: Wi-Fi or USB" src="https://img.shields.io/badge/connection-Wi--Fi%20%C2%B7%20USB-555555">
   <img alt="Audio: 48 kHz, Opus up to 256 kbit/s" src="https://img.shields.io/badge/audio-48%20kHz%20%C2%B7%20Opus%20256%20kbit%2Fs-E6A028">
   <br>
   <img alt="Rust" src="https://img.shields.io/badge/Rust-B7410E?logo=rust&logoColor=white">
@@ -16,7 +16,7 @@
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-E6A028">
   <br>
   <img alt="Linux: planned" src="https://img.shields.io/badge/Linux-planned-lightgrey?logo=linux&logoColor=white">
-  <img alt="USB and Bluetooth: planned" src="https://img.shields.io/badge/USB%20%C2%B7%20Bluetooth-planned-lightgrey">
+  <img alt="Bluetooth: planned" src="https://img.shields.io/badge/Bluetooth-planned-lightgrey">
 </p>
 
 Two parts: an Android app that captures the microphone and a PC client that turns it into a
@@ -32,7 +32,7 @@ microphone for other programs.
 
 ## Requirements
 
-- **Phone:** Android 11 or newer, on the same Wi-Fi as the PC.
+- **Phone:** Android 11 or newer, on the same Wi-Fi as the PC or on a USB cable.
 - **PC:** Windows 10 or 11 (tested on 11) and a virtual microphone, so other programs can use
   the sound (see below). Without one, Galdr can still play to your speakers.
 
@@ -53,13 +53,26 @@ programs see). Other virtual cables work too; Galdr lists the ones it finds.
 ### 2. Connect
 
 1. **Phone:** open Galdr and press **Start**.
-2. **PC:** run `galdr-gui.exe`. Your phone shows up under *Phone IP* within a few seconds;
-   click it (or type the IP the phone shows). Pick **VB-Audio Virtual Cable** under
-   *Microphone* and press **Connect**.
+2. **PC:** run `galdr-gui.exe`. Your phone shows up under *Phones* within a few seconds (or
+   type the IP the phone shows under *Enter IP*). Pick **VB-Audio Virtual Cable** under
+   *Microphone* and press **Connect** next to the phone.
 3. **In Discord, OBS, Zoom, …:** choose **CABLE Output (VB-Audio Virtual Cable)** as the
    microphone.
 
 Tick *Listen to myself* to hear what is sent.
+
+### USB instead of Wi-Fi
+
+A cable gives a steady, lower delay: Wi-Fi delivers packets unevenly, so Galdr has to buffer
+more. Galdr talks to the phone through **adb**, Android's USB debugging tool.
+
+1. **Phone:** turn on *Developer options* (Settings → About phone → tap *Build number* seven
+   times), then *Developer options* → **USB debugging**.
+2. **PC:** get adb: unzip [Android SDK Platform-Tools](https://developer.android.com/tools/releases/platform-tools)
+   and put `adb.exe` (with the two `AdbWin*.dll` next to it) beside `galdr-gui.exe`, or anywhere
+   on `PATH`.
+3. Plug the phone in and allow USB debugging when it asks. Press **Start** in Galdr on the
+   phone; it shows up under *Phones* as *USB*.
 
 ### If there is no sound
 
@@ -85,15 +98,17 @@ resolution, arrives intact. Check with
 galdr find
 galdr devices
 galdr connect 192.168.1.20 --device "CABLE Input" --monitor
+galdr connect usb --device "CABLE Input"
 ```
 
-`find` lists phones that pressed Start. `--device <name>` plays into a device (part of its
+`find` lists phones that pressed Start, and those on USB. `usb` connects to the phone on the
+cable (`usb:<serial>` picks one of several). `--device <name>` plays into a device (part of its
 name is enough), `--monitor` also plays to the speakers. See `galdr connect --help`.
 
 ## Plans
 
 - **Linux** PC client (the virtual microphone via PipeWire).
-- **USB and Bluetooth** besides Wi-Fi.
+- **Bluetooth** besides Wi-Fi and USB.
 - Possibly **an own Windows microphone driver**, so no virtual cable is needed.
 
 ## Building

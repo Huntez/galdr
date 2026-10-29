@@ -13,10 +13,19 @@ import java.net.DatagramSocket
 import java.net.InetSocketAddress
 import kotlin.concurrent.thread
 
+/** Where media packets go. */
+sealed interface MediaLink {
+    /** Datagrams to the PC's media port (Wi-Fi). */
+    data class Udp(val target: InetSocketAddress) : MediaLink
+
+    /** MEDIA messages on the control connection (USB, through adb). */
+    class InBand(val send: (packet: ByteArray, length: Int) -> Unit) : MediaLink
+}
+
 /** Captures the microphone, encodes Opus and sends media packets to the PC until closed. */
 class Streamer(
     private val context: Context,
-    private val target: InetSocketAddress,
+    private val link: MediaLink,
     private val processed: () -> Boolean,
     private val micAddress: () -> String,
     private val bitrate: Int,
@@ -71,17 +80,27 @@ class Streamer(
 
     private fun run() {
         var mic = Mic(processed(), micAddress())
-        val socket = DatagramSocket()
-        // Prefer Wi-Fi when a VPN is the default network. A VPN may forbid this; then the
-        // system routing is used, which reaches the LAN when the VPN excludes it.
-        runCatching { Wifi.network(context)?.bindSocket(socket) }
-            .onFailure { Log.w(TAG, "could not bind to Wi-Fi: $it") }
-        // DSCP EF: WMM routers put these into the Wi-Fi voice queue (less jitter under load).
-        runCatching { socket.trafficClass = DSCP_VOICE }
+        val packet = ByteArray(HEADER + MAX_OPUS)
+        val socket = (link as? MediaLink.Udp)?.let { DatagramSocket() }
+        val send: (Int) -> Unit = when (link) {
+            is MediaLink.Udp -> {
+                // Prefer Wi-Fi when a VPN is the default network. A VPN may forbid this; then the
+                // system routing is used, which reaches the LAN when the VPN excludes it.
+                runCatching { Wifi.network(context)?.bindSocket(socket!!) }
+                    .onFailure { Log.w(TAG, "could not bind to Wi-Fi: $it") }
+                // DSCP EF: WMM routers put these into the Wi-Fi voice queue (less jitter under load).
+                runCatching { socket!!.trafficClass = DSCP_VOICE }
+                val datagram = DatagramPacket(packet, packet.size, link.target)
+                fun(length: Int) {
+                    datagram.length = length
+                    socket!!.send(datagram)
+                }
+            }
+            is MediaLink.InBand -> { length -> link.send(packet, length) }
+        }
         try {
-            Log.i(TAG, "streaming to $target, ${bitrate / 1000} kbit/s, $frameMs ms frames")
-            val packet = ByteArray(HEADER + MAX_OPUS)
-            val datagram = DatagramPacket(packet, packet.size, target)
+            val to = if (link is MediaLink.Udp) "${link.target}" else "USB"
+            Log.i(TAG, "streaming to $to, ${bitrate / 1000} kbit/s, $frameMs ms frames")
             var samples = 0L
             var seq = 0L
             while (running) {
@@ -96,15 +115,14 @@ class Streamer(
                 if (size <= 0) continue
                 Status.level = mic.native.peak
                 writeHeader(packet, seq, samples)
-                datagram.length = HEADER + size
-                socket.send(datagram)
+                send(HEADER + size)
                 samples += mic.native.frameSamples
                 seq = (seq + 1) and 0xffff_ffffL
             }
         } finally {
             Status.level = 0f
             mic.close()
-            socket.close()
+            socket?.close()
         }
     }
 

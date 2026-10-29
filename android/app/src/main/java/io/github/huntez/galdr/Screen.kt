@@ -68,6 +68,10 @@ data class ScreenState(
     val peer: String? = null,
     val error: String? = null,
     val address: String? = null,
+    /** Streaming to a PC over USB. */
+    val overUsb: Boolean = false,
+    /** USB debugging is on (needed for the cable). */
+    val usbDebugging: Boolean = false,
     /** Read only while drawing the meter, so its 20 updates/s don't recompose the screen. */
     val level: () -> Float = { 0f },
     val processed: Boolean = false,
@@ -181,9 +185,14 @@ fun Screen(state: ScreenState, actions: ScreenActions, advancedOpen: Boolean = f
                     )
                 }
                 Spacer(Modifier.height(14.dp))
-                val address = state.address ?: "no Wi-Fi"
                 val port = if (state.port != Protocol.CONTROL_PORT) ":${state.port}" else ""
-                Hint("IP $address$port · for Enter IP on the PC")
+                Hint(
+                    when {
+                        state.overUsb && state.phase == Status.Phase.STREAMING -> "Over the USB cable"
+                        state.address == null -> "No Wi-Fi · connect with a USB cable instead"
+                        else -> "IP ${state.address}$port · for Enter IP on the PC"
+                    },
+                )
             }
 
             Button(
@@ -306,6 +315,18 @@ private fun Advanced(state: ScreenState, actions: ScreenActions, initiallyOpen: 
         Hint(
             "Default ${Protocol.CONTROL_PORT}. Galdr on the PC learns it when it finds the phone. " +
                 "Applies on the next Start.",
+        )
+        Spacer(Modifier.height(16.dp))
+
+        Text("USB cable")
+        Spacer(Modifier.height(8.dp))
+        Hint(
+            if (state.usbDebugging) {
+                "Ready: plug the phone in, press Start and pick it under Phones on the PC (marked USB)."
+            } else {
+                "Turn on USB debugging (Settings → System → Developer options) to connect with a " +
+                    "cable instead of Wi-Fi. The PC also needs adb, see the README."
+            },
         )
         Spacer(Modifier.height(16.dp))
 

@@ -1,5 +1,6 @@
 //! galdr — use your phone as a PC microphone over Wi-Fi.
 
+pub mod adb;
 pub mod audio;
 pub mod control;
 pub mod discovery;

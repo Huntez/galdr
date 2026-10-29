@@ -36,13 +36,13 @@ class MicService : Service() {
                 settings.port,
                 name,
                 frameMs = { settings.frameMs },
-                openStream = { target, frameMs ->
-                    Streamer(this, target, { settings.processed }, { settings.mic }, settings.bitrate, frameMs) {
+                openStream = { link, frameMs ->
+                    Streamer(this, link, { settings.processed }, { settings.mic }, settings.bitrate, frameMs) {
                         settings.gain
                     }
                 },
-                onPeer = { peer ->
-                    Status.set(if (peer == null) Status.Phase.WAITING else Status.Phase.STREAMING, peer)
+                onPeer = { peer, usb ->
+                    Status.set(if (peer == null) Status.Phase.WAITING else Status.Phase.STREAMING, peer, usb = usb)
                 },
             )
         } catch (e: IOException) {

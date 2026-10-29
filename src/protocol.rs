@@ -18,6 +18,8 @@ pub const MSG_HELLO: u8 = 0x01;
 pub const MSG_WELCOME: u8 = 0x02;
 pub const MSG_REJECT: u8 = 0x03;
 pub const MSG_PING: u8 = 0x04;
+/// A media packet on the control connection, when `HELLO` asked for media port 0 (USB).
+pub const MSG_MEDIA: u8 = 0x05;
 
 const DISCOVERY_REQUEST: u8 = 0x10;
 const DISCOVERY_REPLY: u8 = 0x11;

@@ -5,12 +5,14 @@
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, UdpSocket};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 
+use crate::adb;
 use crate::audio::{self, PcmQueue, Playback};
 use crate::control::ControlSession;
 use crate::jitter::Jitter;
@@ -46,6 +48,8 @@ pub struct Config {
     pub latency_ms: u32,
     /// Size the buffer to how unevenly packets arrive (see [`Jitter`]).
     pub adaptive_buffer: bool,
+    /// Reach the phone over USB through adb (its serial) instead of over the network at `phone`.
+    pub usb: Option<String>,
     pub wav: Option<PathBuf>,
 }
 
@@ -59,6 +63,7 @@ impl Config {
             monitor: false,
             latency_ms: 60,
             adaptive_buffer: true,
+            usb: None,
             wav: None,
         }
     }
@@ -249,16 +254,37 @@ impl Worker {
             IpAddr::V4(_) => Ipv4Addr::UNSPECIFIED.into(),
             IpAddr::V6(_) => Ipv6Addr::UNSPECIFIED.into(),
         };
-        let udp = UdpSocket::bind((any, cfg.media_port)).with_context(|| {
-            format!(
-                "UDP port {} is busy (is another copy of Galdr running?)",
-                cfg.media_port
-            )
-        })?;
-        udp.set_read_timeout(Some(POLL))?;
-
-        let session =
-            ControlSession::connect(SocketAddr::new(cfg.phone, cfg.control_port), cfg.media_port)?;
+        // Kept until the session ends: dropping it removes the adb port forward.
+        let _forward;
+        let (session, mut media) = match &cfg.usb {
+            // Over USB everything goes through one forwarded TCP connection.
+            Some(serial) => {
+                let forward = adb::forward(serial, cfg.control_port)?;
+                let local = SocketAddr::new(Ipv4Addr::LOCALHOST.into(), forward.port);
+                _forward = Some(forward);
+                let mut session =
+                    ControlSession::connect(local, 0).context("is Galdr started on the phone?")?;
+                let Some(rx) = session.media.take() else {
+                    bail!("no media channel");
+                };
+                (session, Media::InBand(rx))
+            }
+            None => {
+                _forward = None;
+                let udp = UdpSocket::bind((any, cfg.media_port)).with_context(|| {
+                    format!(
+                        "UDP port {} is busy (is another copy of Galdr running?)",
+                        cfg.media_port
+                    )
+                })?;
+                udp.set_read_timeout(Some(POLL))?;
+                let session = ControlSession::connect(
+                    SocketAddr::new(cfg.phone, cfg.control_port),
+                    cfg.media_port,
+                )?;
+                (session, Media::Udp(udp, cfg.phone))
+            }
+        };
         self.update(|s| {
             s.phone_name = Some(session.welcome.phone_name.clone());
             s.state = State::Streaming;
@@ -302,21 +328,9 @@ impl Worker {
                 last_sync = Instant::now();
             }
 
-            let (n, from) = match udp.recv_from(&mut buf) {
-                Ok(r) => r,
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    continue;
-                }
-                Err(e) => return Err(e.into()),
-            };
-            if from.ip().to_canonical() != cfg.phone.to_canonical() {
+            let Some(n) = media.recv(&mut buf)? else {
                 continue;
-            }
+            };
             let Some(packet) = parse_media(&buf[..n]) else {
                 self.update(|s| s.bad += 1);
                 continue;
@@ -396,6 +410,45 @@ impl Worker {
 
     fn update(&self, f: impl FnOnce(&mut Stats)) {
         f(&mut self.stats.lock().unwrap());
+    }
+}
+
+/// Where media packets come from.
+enum Media {
+    /// Datagrams; only those from the phone count.
+    Udp(UdpSocket, IpAddr),
+    /// Packets the control connection received (USB).
+    InBand(Receiver<Vec<u8>>),
+}
+
+impl Media {
+    /// The next packet into `buf`; None when nothing came within [`POLL`].
+    fn recv(&mut self, buf: &mut [u8]) -> Result<Option<usize>> {
+        match self {
+            Media::Udp(socket, phone) => match socket.recv_from(buf) {
+                Ok((n, from)) => {
+                    Ok((from.ip().to_canonical() == phone.to_canonical()).then_some(n))
+                }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) =>
+                {
+                    Ok(None)
+                }
+                Err(e) => Err(e.into()),
+            },
+            Media::InBand(rx) => match rx.recv_timeout(POLL) {
+                Ok(packet) => {
+                    let n = packet.len().min(buf.len());
+                    buf[..n].copy_from_slice(&packet[..n]);
+                    Ok(Some(n))
+                }
+                // A closed connection shows up as a dead session in the loop.
+                Err(RecvTimeoutError::Timeout | RecvTimeoutError::Disconnected) => Ok(None),
+            },
+        }
     }
 }
 

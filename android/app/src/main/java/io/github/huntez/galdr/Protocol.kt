@@ -13,6 +13,8 @@ object Protocol {
     const val WELCOME = 0x02
     const val REJECT = 0x03
     const val PING = 0x04
+    /** A media packet on the control connection, when HELLO gave media port 0 (USB via adb). */
+    const val MEDIA_INBAND = 0x05
 
     const val DISCOVERY_REQUEST = 0x10
     const val DISCOVERY_REPLY = 0x11

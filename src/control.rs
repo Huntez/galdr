@@ -4,6 +4,7 @@ use std::io;
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
@@ -22,9 +23,12 @@ pub struct ControlSession {
     alive: Arc<AtomicBool>,
     threads: Vec<JoinHandle<()>>,
     pub welcome: Welcome,
+    /// Media packets that came on this connection (asked for with media port 0).
+    pub media: Option<Receiver<Vec<u8>>>,
 }
 
 impl ControlSession {
+    /// `media_port` 0 asks the phone to send the audio on the control connection itself.
     pub fn connect(phone: SocketAddr, media_port: u16) -> Result<Self> {
         let mut stream = TcpStream::connect_timeout(&phone, CONNECT_TIMEOUT)
             .with_context(|| format!("cannot reach phone at {phone}"))?;
@@ -57,15 +61,23 @@ impl ControlSession {
         }
 
         let alive = Arc::new(AtomicBool::new(true));
+        let (media_tx, media) = match media_port {
+            0 => {
+                let (tx, rx) = mpsc::channel();
+                (Some(tx), Some(rx))
+            }
+            _ => (None, None),
+        };
         let threads = vec![
             spawn_pinger(stream.try_clone()?, alive.clone()),
-            spawn_reader(stream.try_clone()?, alive.clone()),
+            spawn_reader(stream.try_clone()?, alive.clone(), media_tx),
         ];
         Ok(Self {
             stream,
             alive,
             threads,
             welcome,
+            media,
         })
     }
 
@@ -107,10 +119,20 @@ fn spawn_pinger(mut stream: TcpStream, alive: Arc<AtomicBool>) -> JoinHandle<()>
 }
 
 /// The phone pings every second; a read timeout or a closed connection ends the session.
-fn spawn_reader(mut stream: TcpStream, alive: Arc<AtomicBool>) -> JoinHandle<()> {
+/// Media packets, if any come this way, go to `media`.
+fn spawn_reader(
+    mut stream: TcpStream,
+    alive: Arc<AtomicBool>,
+    media: Option<Sender<Vec<u8>>>,
+) -> JoinHandle<()> {
     thread::spawn(move || {
         loop {
             match read_message(&mut stream) {
+                Ok((MSG_MEDIA, packet)) => {
+                    if let Some(tx) = &media {
+                        let _ = tx.send(packet);
+                    }
+                }
                 Ok(_) => {} // PING, or a message from a later version
                 Err(e) => {
                     if alive.swap(false, Ordering::Relaxed)
