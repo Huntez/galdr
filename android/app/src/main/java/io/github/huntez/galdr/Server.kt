@@ -17,7 +17,10 @@ import kotlin.concurrent.thread
 class Server(
     port: Int,
     private val phoneName: String,
-    private val openStream: (InetSocketAddress) -> AutoCloseable,
+    /** Opus frame length for the next session, read when a PC connects. */
+    private val frameMs: () -> Int,
+    /** Starts streaming to the PC with the given frame length. */
+    private val openStream: (InetSocketAddress, Int) -> AutoCloseable,
     /** The PC's name and address while one is connected, null when it left. */
     private val onPeer: (String?) -> Unit,
 ) : AutoCloseable {
@@ -52,9 +55,9 @@ class Server(
      * The previous PC's session ends on its own thread; close its stream here first, so two
      * streams never hold the microphone at once.
      */
-    private fun startStream(target: InetSocketAddress): AutoCloseable = synchronized(streamLock) {
+    private fun startStream(target: InetSocketAddress, frameMs: Int): AutoCloseable = synchronized(streamLock) {
         stream?.close()
-        openStream(target).also { stream = it }
+        openStream(target, frameMs).also { stream = it }
     }
 
     private fun stopStream(mine: AutoCloseable) = synchronized(streamLock) {
@@ -89,8 +92,9 @@ class Server(
             val mediaPort = ((hello[5].toInt() and 0xff) shl 8) or (hello[6].toInt() and 0xff)
             val pcName = String(hello, 7, hello.size - 7, Charsets.UTF_8).ifBlank { "PC" }
 
-            send(Protocol.WELCOME, welcome())
-            stream = startStream(InetSocketAddress(peer, mediaPort))
+            val frameMs = frameMs()
+            send(Protocol.WELCOME, welcome(frameMs))
+            stream = startStream(InetSocketAddress(peer, mediaPort), frameMs)
             onPeer("$pcName (${peer.hostAddress})")
             pinger = thread(name = "galdr-ping") {
                 try {
@@ -125,14 +129,14 @@ class Server(
         return type to ByteArray(len).also { input.readFully(it) }
     }
 
-    private fun welcome(): ByteArray = ByteArrayOutputStream().apply {
+    private fun welcome(frameMs: Int): ByteArray = ByteArrayOutputStream().apply {
         val out = DataOutputStream(this)
         out.write(Protocol.MAGIC)
         out.writeByte(Protocol.VERSION)
         out.writeByte(Protocol.CODEC_OPUS)
         out.writeInt(Protocol.SAMPLE_RATE)
         out.writeByte(Protocol.CHANNELS)
-        out.writeByte(Protocol.FRAME_MS)
+        out.writeByte(frameMs)
         out.write(phoneName.toByteArray(Charsets.UTF_8))
     }.toByteArray()
 

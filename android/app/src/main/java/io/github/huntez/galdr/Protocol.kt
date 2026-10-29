@@ -22,7 +22,8 @@ object Protocol {
     const val CODEC_OPUS = 1
     const val SAMPLE_RATE = 48000
     const val CHANNELS = 1
-    const val FRAME_MS = 20
+    /** Frame lengths a phone may announce in WELCOME; shorter = less delay, more packets. */
+    val FRAME_MS = listOf(20, 10, 5)
 
     /** True if [data] starts with `GLDR` at [offset]. */
     fun hasMagic(data: ByteArray, offset: Int = 0, length: Int = data.size): Boolean =

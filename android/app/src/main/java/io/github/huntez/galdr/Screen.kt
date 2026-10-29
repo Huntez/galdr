@@ -72,6 +72,7 @@ data class ScreenState(
     val level: () -> Float = { 0f },
     val processed: Boolean = false,
     val bitrate: Int = 128_000,
+    val frameMs: Int = Settings.DEFAULT_FRAME_MS,
     val gain: Float = 1f,
     val port: Int = Protocol.CONTROL_PORT,
     val mics: List<MicChoice> = listOf(MicChoice("", "Auto")),
@@ -85,6 +86,7 @@ interface ScreenActions {
     fun toggle() {}
     fun processed(on: Boolean) {}
     fun bitrate(rate: Int) {}
+    fun frameMs(ms: Int) {}
     fun gain(value: Float) {}
     fun port(port: Int) {}
     fun mic(address: String) {}
@@ -273,6 +275,13 @@ private fun Advanced(state: ScreenState, actions: ScreenActions, initiallyOpen: 
         Hint("128 is plenty for voice. Lower it if the sound stutters on weak Wi-Fi. Applies on the next connection.")
         Spacer(Modifier.height(16.dp))
 
+        Text("Packet length, ms")
+        Spacer(Modifier.height(8.dp))
+        Choice(Protocol.FRAME_MS, state.frameMs, { "$it" }, actions::frameMs)
+        Spacer(Modifier.height(8.dp))
+        Hint("Shorter = less delay but more packets. Try 20 if the sound stutters. Applies on the next connection.")
+        Spacer(Modifier.height(16.dp))
+
         var portText by remember(state.port) { mutableStateOf(state.port.toString()) }
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("Port", Modifier.weight(1f))
@@ -313,6 +322,7 @@ private fun Advanced(state: ScreenState, actions: ScreenActions, initiallyOpen: 
                     actions.port(Protocol.CONTROL_PORT)
                     actions.mic("")
                     actions.bitrate(128_000)
+                    actions.frameMs(Settings.DEFAULT_FRAME_MS)
                     actions.autoStart(false)
                 }
                 .padding(vertical = 8.dp),

@@ -104,7 +104,9 @@ name is enough), `--monitor` also plays to the speakers. See `galdr connect --he
 cargo build --release
 ```
 
-**Android:** JDK 17+ and the Android SDK (or open `android/` in Android Studio):
+**Android:** JDK 17+, the Android SDK with NDK and CMake (or open `android/` in Android Studio).
+libopus comes as a git submodule, so clone with `--recursive` or run
+`git submodule update --init` first:
 
 ```
 cd android

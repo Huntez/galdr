@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
         val settings = remember { Settings(this) }
         var processed by remember { mutableStateOf(settings.processed) }
         var bitrate by remember { mutableIntStateOf(settings.bitrate) }
+        var frameMs by remember { mutableIntStateOf(settings.frameMs) }
         var gain by remember { mutableFloatStateOf(settings.gain) }
         var port by remember { mutableIntStateOf(settings.port) }
         var mic by remember { mutableStateOf(settings.mic) }
@@ -84,6 +85,7 @@ class MainActivity : ComponentActivity() {
                 level = { level },
                 processed = processed,
                 bitrate = bitrate,
+                frameMs = frameMs,
                 gain = gain,
                 port = port,
                 mics = mics,
@@ -112,6 +114,11 @@ class MainActivity : ComponentActivity() {
                 override fun bitrate(rate: Int) {
                     bitrate = rate
                     settings.bitrate = rate
+                }
+
+                override fun frameMs(ms: Int) {
+                    frameMs = ms
+                    settings.frameMs = ms
                 }
 
                 override fun gain(value: Float) {

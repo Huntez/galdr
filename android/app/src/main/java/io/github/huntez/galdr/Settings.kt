@@ -20,6 +20,11 @@ class Settings(context: Context) {
         get() = prefs.getInt("bitrate", 128_000)
         set(value) = prefs.edit().putInt("bitrate", value).apply()
 
+    /** Opus frame length, one of [Protocol.FRAME_MS]. Applies on the next connection. */
+    var frameMs: Int
+        get() = prefs.getInt("frameMs", DEFAULT_FRAME_MS).takeIf { it in Protocol.FRAME_MS } ?: DEFAULT_FRAME_MS
+        set(value) = prefs.edit().putInt("frameMs", value).apply()
+
     /** TCP port the phone listens on; the PC must use the same. Applies on the next Start. */
     var port: Int
         // 8125 was an earlier default.
@@ -38,5 +43,6 @@ class Settings(context: Context) {
     companion object {
         val BITRATES = listOf(64_000, 96_000, 128_000, 192_000, 256_000)
         const val MAX_GAIN = 4f
+        const val DEFAULT_FRAME_MS = 10
     }
 }

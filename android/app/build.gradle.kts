@@ -13,6 +13,19 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        ndk {
+            // 64- and 32-bit ARM phones; x86_64 for the emulator. ~0.3 MB of libopus each.
+            abiFilters += listOf("arm64-v8a", "armeabi-v7a", "x86_64")
+        }
+    }
+
+    // Microphone (AAudio) and Opus (libopus, a git submodule) in native code: src/main/cpp.
+    ndkVersion = "30.0.16248370"
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "4.1.2"
+        }
     }
 
     buildTypes {

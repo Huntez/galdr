@@ -35,8 +35,11 @@ class MicService : Service() {
             Server(
                 settings.port,
                 name,
-                openStream = { target ->
-                    Streamer(this, target, { settings.processed }, { settings.mic }, settings.bitrate) { settings.gain }
+                frameMs = { settings.frameMs },
+                openStream = { target, frameMs ->
+                    Streamer(this, target, { settings.processed }, { settings.mic }, settings.bitrate, frameMs) {
+                        settings.gain
+                    }
                 },
                 onPeer = { peer ->
                     Status.set(if (peer == null) Status.Phase.WAITING else Status.Phase.STREAMING, peer)
