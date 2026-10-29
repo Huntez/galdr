@@ -203,4 +203,7 @@ See [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 MIT. The Android app bundles the Ubuntu font (Ubuntu Font Licence) and Hack (MIT, Bitstream Vera licence).
 The PC client includes RNNoise (via nnnoiseless, BSD-3-Clause) and uses DeepFilterNet and its
-model (MIT or Apache-2.0).
+model (MIT or Apache-2.0). Both include the Opus codec (BSD-3-Clause). The licences of
+everything bundled come with each download: `THIRD-PARTY-LICENSES.txt` in the Windows zips
+(generated with [cargo-about](https://github.com/EmbarkStudios/cargo-about) from `about.toml`),
+`assets/licenses` in the APK.

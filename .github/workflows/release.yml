@@ -40,6 +40,13 @@ jobs:
       - name: Build
         run: cargo build --release --locked
 
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-about@0.9.3
+
+      - name: Third-party licences
+        run: cargo about generate --locked about.hbs -o THIRD-PARTY-LICENSES.txt
+
       - name: Package
         env:
           # DeepFilterNet 3's low-latency model, from its v0.5.6 release (src/denoise.rs).
@@ -61,7 +68,7 @@ jobs:
               dir="galdr-cli-$VERSION-windows-x64"; exe=galdr.exe
             fi
             mkdir "$dir"
-            cp "target/release/$exe" README.md LICENSE "$dir/"
+            cp "target/release/$exe" README.md LICENSE THIRD-PARTY-LICENSES.txt "$dir/"
             # adb for phones on a USB cable (see the README), with its licence notice.
             cp platform-tools/adb.exe platform-tools/AdbWinApi.dll platform-tools/AdbWinUsbApi.dll "$dir/"
             cp platform-tools/NOTICE.txt "$dir/adb-NOTICE.txt"
