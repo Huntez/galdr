@@ -1,0 +1,30 @@
+[package]
+name = "galdr"
+version = "0.1.0"
+edition = "2024"
+description = "Use your phone as a PC microphone over Wi-Fi"
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4", features = ["derive"] }
+cpal = "0.18.2"
+# glow (OpenGL) instead of the default wgpu: first frame ~200 ms instead of ~400 ms.
+eframe = { version = "0.37", default-features = false, features = [
+    "glow",
+    "persistence",
+    "accesskit",
+    "default_fonts",
+    "system_fonts",
+    "links",
+] }
+if-addrs = "0.15.0"
+opus-head-sys = "0.3.3"
+raw-window-handle = "0.6"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tray-icon = "0.26"
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_UI_Controls", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_LibraryLoader"] }
+
+[build-dependencies]
+winresource = "0.1.34"
