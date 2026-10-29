@@ -8,7 +8,6 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
-import android.os.Build
 import android.os.IBinder
 import android.util.Log
 import java.io.IOException
@@ -31,8 +30,7 @@ class MicService : Service() {
 
         startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         val settings = Settings(this)
-        val name = android.provider.Settings.Global.getString(contentResolver, android.provider.Settings.Global.DEVICE_NAME)
-            ?: Build.MODEL
+        val name = Device.name(this)
         server = try {
             Server(
                 settings.port,
@@ -50,10 +48,7 @@ class MicService : Service() {
             return START_NOT_STICKY
         }
         // Without discovery the PC can still connect by IP.
-        // Shown on the PC under the name: the model when the user renamed the phone, and Android.
-        val android = "Android ${Build.VERSION.RELEASE}"
-        val details = if (name == Build.MODEL) android else "${Build.MODEL} · $android"
-        discovery = runCatching { Discovery(this, settings.port, name, details) }
+        discovery = runCatching { Discovery(this, settings.port, name, Device.details(name)) }
             .onFailure { Log.w(TAG, "discovery: $it") }
             .getOrNull()
         val wifi = getSystemService(WifiManager::class.java)

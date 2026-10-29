@@ -39,6 +39,7 @@ class MainActivity : ComponentActivity() {
         var mic by remember { mutableStateOf(settings.mic) }
         var autoStart by remember { mutableStateOf(settings.autoStart) }
         val mics = remember { Mics.list(this) }
+        val name = remember { Device.name(this) }
         var denied by remember { mutableStateOf(false) }
         var version by remember { mutableIntStateOf(0) }
         var level by remember { mutableFloatStateOf(0f) }
@@ -76,6 +77,7 @@ class MainActivity : ComponentActivity() {
         Screen(
             ScreenState(
                 phase = Status.phase,
+                name = name,
                 peer = Status.peer,
                 error = Status.error,
                 address = address,

@@ -63,6 +63,8 @@ import kotlin.math.roundToInt
 /** Everything the screen shows; no Android state behind it, so it renders in previews. */
 data class ScreenState(
     val phase: Status.Phase,
+    /** This phone's name, as PCs list it. */
+    val name: String = "Pixel 7",
     val peer: String? = null,
     val error: String? = null,
     val address: String? = null,
@@ -148,19 +150,11 @@ fun Screen(state: ScreenState, actions: ScreenActions, advancedOpen: Boolean = f
                 Text("Use this phone as a PC microphone", color = Grey)
             }
 
-            // No title: the label already says what this box is.
-            Section(null) {
-                Text("Galdr on the PC finds this phone, or enter this address", color = Grey, fontSize = 15.sp)
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    state.address ?: "no Wi-Fi",
-                    fontSize = 32.sp,
-                    fontFamily = Hack,
-                )
-                if (state.port != Protocol.CONTROL_PORT) {
-                    Hint("Port ${state.port}")
-                }
-                Spacer(Modifier.height(18.dp))
+            // Like the phone's card on the PC: its name first, the address only as a footnote
+            // for typing it in by hand (the PC finds the phone by itself).
+            Section(null, highlighted = state.phase == Status.Phase.STREAMING) {
+                Text(state.name, fontSize = 26.sp)
+                Spacer(Modifier.height(12.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     val (dot, text) = when {
                         state.permissionDenied -> Red to "Microphone permission is needed"
@@ -184,6 +178,10 @@ fun Screen(state: ScreenState, actions: ScreenActions, advancedOpen: Boolean = f
                         gapSize = 0.dp,
                     )
                 }
+                Spacer(Modifier.height(14.dp))
+                val address = state.address ?: "no Wi-Fi"
+                val port = if (state.port != Protocol.CONTROL_PORT) ":${state.port}" else ""
+                Hint("IP $address$port · for Enter IP on the PC")
             }
 
             Button(
@@ -362,11 +360,11 @@ private fun Hint(text: String) = Text(text, color = Grey, fontSize = 14.sp, line
 
 /** Outlined group with a grey title, like the PC app's sections. */
 @Composable
-private fun Section(title: String?, content: @Composable () -> Unit) {
+private fun Section(title: String?, highlighted: Boolean = false, content: @Composable () -> Unit) {
     Column(
         Modifier
             .fillMaxWidth()
-            .border(1.dp, Outline, RoundedCornerShape(8.dp))
+            .border(if (highlighted) 1.5.dp else 1.dp, if (highlighted) Accent else Outline, RoundedCornerShape(8.dp))
             .padding(16.dp),
     ) {
         if (title != null) {
