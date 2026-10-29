@@ -46,6 +46,8 @@ struct Settings {
     /// Local UDP port the phone streams audio to.
     media_port: u16,
     connect_on_start: bool,
+    /// Phones tab: false = search the network, true = type the IP by hand.
+    manual_ip: bool,
     close_to_tray: bool,
 }
 
@@ -60,6 +62,7 @@ impl Default for Settings {
             media_port: DEFAULT_MEDIA_PORT,
             connect_on_start: false,
             close_to_tray: true,
+            manual_ip: false,
         }
     }
 }
@@ -256,26 +259,11 @@ impl GaldrApp {
     }
 
     fn settings_ui(&mut self, ui: &mut egui::Ui, locked: bool) {
-        section(ui, "Connection", |ui| {
+        section(ui, "Sound", |ui| {
             egui::Grid::new("settings")
                 .num_columns(2)
                 .spacing([14.0, 10.0])
                 .show(ui, |ui| {
-                    ui.label("Phone IP");
-                    ui.add_enabled(
-                        !locked,
-                        egui::TextEdit::singleline(&mut self.settings.phone)
-                            .hint_text("shown in Galdr on the phone, e.g. 192.168.1.20")
-                            .desired_width(ui.available_width()),
-                    );
-                    ui.end_row();
-
-                    if !locked {
-                        ui.label("");
-                        self.found_phones_ui(ui);
-                        ui.end_row();
-                    }
-
                     ui.label("Microphone");
                     ui.add_enabled_ui(!locked, |ui| {
                         ui.horizontal(|ui| {
@@ -398,25 +386,122 @@ impl GaldrApp {
             });
     }
 
-    /// Phones the search found, as buttons that fill in the IP.
-    fn found_phones_ui(&mut self, ui: &mut egui::Ui) {
-        // One per line: wrapping inside the grid cell leaves an empty line above.
-        ui.vertical(|ui| {
-            if self.phones.is_empty() {
-                ui.label(
-                    RichText::new("Searching… press Start in Galdr on the phone")
-                        .small()
-                        .weak(),
-                );
-                return;
-            }
-            for phone in &self.phones {
-                let current = self.settings.phone.trim() == phone.addr.to_string();
-                let text = RichText::new(format!("{}  ·  {}", phone.name, phone.addr)).small();
-                if ui.selectable_label(current, text).clicked() {
-                    self.settings.phone = phone.addr.to_string();
-                    self.settings.control_port = phone.control_port;
+    /// Two tabs: Search lists the phones that answered, Enter IP takes an address by hand.
+    /// One card per phone, each with its own Connect button; the connected one shows the status.
+    fn phones_ui(&mut self, ui: &mut egui::Ui, stats: Option<&Stats>) {
+        let connected = stats.is_some();
+        section(ui, "Phones", |ui| {
+            ui.add_enabled_ui(!connected, |ui| {
+                ui.horizontal(|ui| {
+                    ui.selectable_value(&mut self.settings.manual_ip, false, "Search");
+                    ui.selectable_value(&mut self.settings.manual_ip, true, "Enter IP");
+                });
+            });
+            ui.add_space(4.0);
+
+            let chosen = self.settings.phone.trim().to_string();
+            let chosen_addr = chosen.parse::<IpAddr>().ok();
+            // The phone being streamed from, for when it is not among the cards below.
+            let live_card = |addr: IpAddr, details: &str| Phone {
+                name: stats
+                    .and_then(|s| s.phone_name.clone())
+                    .unwrap_or_else(|| addr.to_string()),
+                details: details.into(),
+                addr,
+                control_port: self.settings.control_port,
+            };
+            let mut cards = Vec::new();
+            if self.settings.manual_ip {
+                // Field and button in one row; a card only once connected, named by the phone.
+                match chosen_addr.filter(|_| connected) {
+                    Some(addr) => cards.push(live_card(addr, "")),
+                    None => {
+                        ui.horizontal(|ui| {
+                            let button_w = 90.0;
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.settings.phone)
+                                    .hint_text("IP shown in Galdr on the phone, e.g. 192.168.1.20")
+                                    .desired_width(
+                                        ui.available_width()
+                                            - button_w
+                                            - ui.spacing().item_spacing.x,
+                                    ),
+                            );
+                            let connect =
+                                accent_button("Connect").min_size(egui::vec2(button_w, 0.0));
+                            if ui.add(connect).clicked() {
+                                self.connect();
+                            }
+                        });
+                    }
                 }
+            } else {
+                cards = self.phones.clone();
+                if let Some(addr) =
+                    chosen_addr.filter(|a| connected && !cards.iter().any(|p| p.addr == *a))
+                {
+                    cards.push(live_card(addr, ""));
+                }
+                if cards.is_empty() {
+                    ui.label(RichText::new("Searching… press Start in Galdr on the phone").weak());
+                }
+            }
+
+            for phone in &cards {
+                let this_one = phone.addr.to_string() == chosen;
+                let live = stats.filter(|_| this_one);
+                let stroke = if live.is_some() {
+                    egui::Stroke::new(1.5, ACCENT)
+                } else {
+                    ui.visuals().widgets.noninteractive.bg_stroke
+                };
+                egui::Frame::new()
+                    .stroke(stroke)
+                    .corner_radius(6)
+                    .inner_margin(12)
+                    .show(ui, |ui| {
+                        ui.set_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.vertical(|ui| {
+                                ui.label(RichText::new(&phone.name).size(16.0).strong());
+                                let mut line = phone.addr.to_string();
+                                if !phone.details.is_empty() {
+                                    line = format!("{}   ·   {line}", phone.details);
+                                }
+                                ui.label(RichText::new(line).small().weak());
+                            });
+                            ui.with_layout(
+                                egui::Layout::right_to_left(egui::Align::Center),
+                                |ui| {
+                                    if live.is_some() {
+                                        if ui
+                                            .button(RichText::new("Disconnect").size(15.0))
+                                            .clicked()
+                                        {
+                                            self.disconnect();
+                                        }
+                                    } else {
+                                        let connect = accent_button("Connect");
+                                        // One phone at a time.
+                                        if ui.add_enabled(stats.is_none(), connect).clicked() {
+                                            self.settings.phone = phone.addr.to_string();
+                                            self.settings.control_port = phone.control_port;
+                                            self.connect();
+                                        }
+                                    }
+                                },
+                            );
+                        });
+                        if let Some(s) = live {
+                            ui.add_space(6.0);
+                            status_ui(ui, s);
+                        }
+                    });
+            }
+            if stats.is_none()
+                && let Some(err) = &self.error
+            {
+                status_line(ui, RED, err);
             }
         });
     }
@@ -424,7 +509,7 @@ impl GaldrApp {
     /// Searches only while disconnected; fills in the IP when exactly one phone answers and
     /// none was entered yet.
     fn update_discovery(&mut self, ctx: &egui::Context) {
-        if self.engine.is_some() {
+        if self.engine.is_some() || self.settings.manual_ip {
             self.discovery = None;
             return;
         }
@@ -559,42 +644,9 @@ impl eframe::App for GaldrApp {
                         ui.label(RichText::new("galdr").size(26.0).strong().color(ACCENT));
                     });
                     ui.add_space(12.0);
+                    self.phones_ui(ui, stats.as_ref());
+                    ui.add_space(12.0);
                     self.settings_ui(ui, stats.is_some());
-                    ui.add_space(12.0);
-
-                    let wide = egui::vec2(ui.available_width(), 38.0);
-                    match &stats {
-                        None => {
-                            let connect = egui::Button::new(
-                                RichText::new("Connect")
-                                    .size(17.0)
-                                    .strong()
-                                    .color(Color32::BLACK),
-                            )
-                            .fill(ACCENT)
-                            .min_size(wide);
-                            if ui.add(connect).clicked() {
-                                self.connect();
-                            }
-                        }
-                        Some(_) => {
-                            let disconnect =
-                                egui::Button::new(RichText::new("Disconnect").size(16.0))
-                                    .min_size(wide);
-                            if ui.add(disconnect).clicked() {
-                                self.disconnect();
-                            }
-                        }
-                    }
-                    ui.add_space(12.0);
-
-                    section(ui, "Status", |ui| match &stats {
-                        Some(s) => status_ui(ui, s),
-                        None => match &self.error {
-                            Some(err) => status_line(ui, RED, err),
-                            None => status_line(ui, Color32::GRAY, "Not connected"),
-                        },
-                    });
                     ui.add_space(10.0);
 
                     ui.horizontal_wrapped(|ui| {
@@ -650,6 +702,8 @@ fn apply_style(ctx: &egui::Context) {
         style.spacing.interact_size.y = 26.0;
         style.spacing.slider_width = 220.0;
         style.interaction.selectable_labels = false;
+        // Text fields in the same grey as the dropdowns, not near-black.
+        style.visuals.text_edit_bg_color = Some(style.visuals.widgets.inactive.weak_bg_fill);
     });
 }
 
@@ -697,6 +751,16 @@ fn section<R>(ui: &mut egui::Ui, title: &str, body: impl FnOnce(&mut egui::Ui) -
             body(ui)
         })
         .inner
+}
+
+fn accent_button(text: &str) -> egui::Button<'_> {
+    egui::Button::new(
+        RichText::new(text)
+            .size(15.0)
+            .strong()
+            .color(Color32::BLACK),
+    )
+    .fill(ACCENT)
 }
 
 fn status_line(ui: &mut egui::Ui, color: Color32, text: &str) {

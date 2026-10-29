@@ -1,6 +1,6 @@
 //! Wire format of the Galdr protocol, version 1 (see docs/PROTOCOL.md).
 //!
-//! Discovery (UDP): `GLDR | 0x10 | version` → `GLDR | 0x11 | version | control port | name`.
+//! Discovery (UDP): `GLDR | 0x10 | version` → `GLDR | 0x11 | version | port | len | name | details`.
 //! Control (TCP):   `type:u8 | len:u16 | payload[len]`.
 //! Media (UDP):     `GLDR | 0x20 | flags | seq:u32 | timestamp:u32 | opus[..]`.
 
@@ -110,18 +110,26 @@ pub fn discovery_request() -> [u8; 6] {
 pub struct DiscoveryReply {
     pub control_port: u16,
     pub name: String,
+    /// e.g. "Android 16"; may be empty.
+    pub details: String,
 }
 
 pub fn parse_discovery_reply(datagram: &[u8]) -> Option<DiscoveryReply> {
     let rest = datagram.strip_prefix(MAGIC.as_slice())?;
     let (&kind, rest) = rest.split_first()?;
     let (&version, rest) = rest.split_first()?;
-    if kind != DISCOVERY_REPLY || version != VERSION || rest.len() < 2 {
+    if kind != DISCOVERY_REPLY || version != VERSION || rest.len() < 3 {
+        return None;
+    }
+    let name_len = rest[2] as usize;
+    let text = rest.get(3..)?;
+    if text.len() < name_len {
         return None;
     }
     Some(DiscoveryReply {
         control_port: u16::from_be_bytes([rest[0], rest[1]]),
-        name: String::from_utf8_lossy(&rest[2..]).into_owned(),
+        name: String::from_utf8_lossy(&text[..name_len]).into_owned(),
+        details: String::from_utf8_lossy(&text[name_len..]).into_owned(),
     })
 }
 
@@ -198,12 +206,17 @@ mod tests {
     fn discovery_round_trip() {
         assert_eq!(discovery_request().to_vec(), hex("474c4452 10 01"));
         assert_eq!(
-            parse_discovery_reply(&hex("474c4452 11 01 bab8 506978656c2037")).unwrap(),
+            parse_discovery_reply(&hex(
+                "474c4452 11 01 bab8 07 506978656c2037 416e64726f6964203136"
+            ))
+            .unwrap(),
             DiscoveryReply {
                 control_port: 47800,
                 name: "Pixel 7".into(),
+                details: "Android 16".into(),
             }
         );
+        assert!(parse_discovery_reply(&hex("474c4452 11 01 bab8 09 5069")).is_none());
         assert!(parse_discovery_reply(&hex("474c4452 10 01")).is_none());
         assert!(parse_discovery_reply(&hex("474c4452 11 02 bab8")).is_none());
     }

@@ -50,7 +50,10 @@ class MicService : Service() {
             return START_NOT_STICKY
         }
         // Without discovery the PC can still connect by IP.
-        discovery = runCatching { Discovery(this, settings.port, name) }
+        // Shown on the PC under the name: the model when the user renamed the phone, and Android.
+        val android = "Android ${Build.VERSION.RELEASE}"
+        val details = if (name == Build.MODEL) android else "${Build.MODEL} · $android"
+        discovery = runCatching { Discovery(this, settings.port, name, details) }
             .onFailure { Log.w(TAG, "discovery: $it") }
             .getOrNull()
         val wifi = getSystemService(WifiManager::class.java)

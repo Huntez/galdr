@@ -18,6 +18,8 @@ const POLL: Duration = Duration::from_millis(100);
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Phone {
     pub name: String,
+    /// e.g. "Android 16"; may be empty.
+    pub details: String,
     pub addr: IpAddr,
     pub control_port: u16,
 }
@@ -59,6 +61,7 @@ fn receive(socket: &UdpSocket) -> Option<Phone> {
     let reply = parse_discovery_reply(&buf[..n])?;
     Some(Phone {
         name: reply.name,
+        details: reply.details,
         addr: from.ip(),
         control_port: reply.control_port,
     })

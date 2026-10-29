@@ -40,7 +40,9 @@ Reply, phone → the request's source address and port:
 | 4 | 1 | `0x11` discovery reply |
 | 5 | 1 | protocol version (`1`) |
 | 6 | 2 | control port (u16) |
-| 8 | … | phone name |
+| 8 | 1 | length *n* of the phone name |
+| 9 | *n* | phone name, e.g. `Pixel 7` |
+| 9 + *n* | … | device details for display, e.g. `Android 16` (may be empty) |
 
 The phone answers only while it is ready to stream (Start pressed). Requests with another
 version or a wrong magic get no reply.

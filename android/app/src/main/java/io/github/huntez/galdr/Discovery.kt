@@ -10,7 +10,7 @@ import java.net.InetSocketAddress
 import kotlin.concurrent.thread
 
 /** Answers discovery requests from PCs (docs/PROTOCOL.md, "Discovery") until closed. */
-class Discovery(context: Context, controlPort: Int, name: String) : AutoCloseable {
+class Discovery(context: Context, controlPort: Int, name: String, details: String) : AutoCloseable {
     private val socket = DatagramSocket(null).apply {
         reuseAddress = true
         bind(InetSocketAddress(controlPort))
@@ -24,7 +24,10 @@ class Discovery(context: Context, controlPort: Int, name: String) : AutoCloseabl
         out.writeByte(Protocol.DISCOVERY_REPLY)
         out.writeByte(Protocol.VERSION)
         out.writeShort(controlPort)
-        out.write(name.toByteArray(Charsets.UTF_8))
+        val nameBytes = name.toByteArray(Charsets.UTF_8).take(255).toByteArray()
+        out.writeByte(nameBytes.size)
+        out.write(nameBytes)
+        out.write(details.toByteArray(Charsets.UTF_8))
     }.toByteArray()
 
     init {
