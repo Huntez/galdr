@@ -422,10 +422,13 @@ impl GaldrApp {
         let connected = stats.is_some();
         section(ui, "Phones", |ui| {
             ui.add_enabled_ui(!connected, |ui| {
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut self.settings.manual_ip, false, "Search");
-                    ui.selectable_value(&mut self.settings.manual_ip, true, "Enter IP");
-                });
+                let height = ui.spacing().interact_size.y;
+                segmented(
+                    ui,
+                    height,
+                    &mut self.settings.manual_ip,
+                    [("Search", false), ("Enter IP", true)],
+                );
             });
             ui.add_space(4.0);
 
@@ -505,69 +508,83 @@ impl GaldrApp {
                 } else {
                     ui.visuals().widgets.noninteractive.bg_stroke
                 };
-                egui::Frame::new()
+                // A shade off the panel so the card stands out, a little more under the pointer.
+                let mut frame = egui::Frame::new()
                     .stroke(stroke)
                     .corner_radius(6)
                     .inner_margin(12)
-                    .show(ui, |ui| {
-                        ui.set_width(ui.available_width());
-                        ui.horizontal(|ui| {
-                            ui.vertical(|ui| {
-                                ui.label(RichText::new(&card.name).size(16.0).strong());
-                                // Over USB the address is just localhost: not worth showing.
-                                let line = [
-                                    card.details.clone(),
-                                    match phone.usb {
-                                        Some(_) => String::new(),
-                                        None => phone.addr.to_string(),
-                                    },
-                                ]
-                                .into_iter()
-                                .filter(|s| !s.is_empty())
-                                .collect::<Vec<_>>()
-                                .join("   ·   ");
-                                ui.label(RichText::new(line).small().weak());
-                            });
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if live.is_some() {
-                                        if ui
-                                            .button(RichText::new("Disconnect").size(15.0))
-                                            .clicked()
-                                        {
-                                            self.disconnect();
-                                        }
-                                    } else if ui.add(accent_button("Connect")).clicked() {
-                                        self.settings.phone = phone.key();
-                                        self.settings.control_port = phone.control_port;
-                                        self.connect();
-                                    }
-                                    ui.add_space(4.0);
-                                    // Right to left: USB is added first so it ends up on the right.
-                                    if card.wifi.is_some() && card.usb.is_some() && live.is_none() {
-                                        ui.selectable_value(
-                                            &mut self.settings.prefer_usb,
-                                            true,
-                                            "USB",
-                                        );
-                                        ui.selectable_value(
-                                            &mut self.settings.prefer_usb,
-                                            false,
-                                            "Wi-Fi",
-                                        );
-                                    } else {
-                                        let way = if phone.usb.is_some() { "USB" } else { "Wi-Fi" };
-                                        ui.label(RichText::new(way).weak());
-                                    }
+                    .begin(ui);
+                {
+                    let ui = &mut frame.content_ui;
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.vertical(|ui| {
+                            ui.label(RichText::new(&card.name).size(16.0).strong());
+                            // Over USB the address is just localhost: not worth showing.
+                            let line = [
+                                card.details.clone(),
+                                match phone.usb {
+                                    Some(_) => String::new(),
+                                    None => phone.addr.to_string(),
                                 },
-                            );
+                            ]
+                            .into_iter()
+                            .filter(|s| !s.is_empty())
+                            .collect::<Vec<_>>()
+                            .join("   ·   ");
+                            ui.label(RichText::new(line).small().weak());
                         });
-                        if let Some(s) = live {
-                            ui.add_space(6.0);
-                            status_ui(ui, s);
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            // One width for both, so the button stays put on connect.
+                            let wide = egui::vec2(100.0, 0.0);
+                            let action = if live.is_some() {
+                                let disconnect =
+                                    egui::Button::new(RichText::new("Disconnect").size(15.0))
+                                        .min_size(wide);
+                                let response = ui.add(disconnect);
+                                if response.clicked() {
+                                    self.disconnect();
+                                }
+                                response
+                            } else {
+                                let response = ui.add(accent_button("Connect").min_size(wide));
+                                if response.clicked() {
+                                    self.settings.phone = phone.key();
+                                    self.settings.control_port = phone.control_port;
+                                    self.connect();
+                                }
+                                response
+                            };
+                            ui.add_space(4.0);
+                            if card.wifi.is_some() && card.usb.is_some() && live.is_none() {
+                                segmented(
+                                    ui,
+                                    action.rect.height(),
+                                    &mut self.settings.prefer_usb,
+                                    [("Wi-Fi", false), ("USB", true)],
+                                );
+                            } else {
+                                let way = if phone.usb.is_some() { "USB" } else { "Wi-Fi" };
+                                ui.label(RichText::new(way).weak());
+                            }
+                        });
                     });
+                    if let Some(s) = live {
+                        ui.add_space(6.0);
+                        status_ui(ui, s);
+                    }
+                }
+                let outer = frame.content_ui.min_rect() + frame.frame.total_margin();
+                let shade = if ui.rect_contains_pointer(outer) {
+                    0.09
+                } else {
+                    0.05
+                };
+                let visuals = ui.visuals();
+                frame.frame.fill = visuals
+                    .panel_fill
+                    .lerp_to_gamma(visuals.text_color(), shade);
+                frame.end(ui);
             }
             if stats.is_none()
                 && let Some(err) = &self.error
@@ -832,6 +849,67 @@ fn accent_button(text: &str) -> egui::Button<'_> {
             .color(Color32::BLACK),
     )
     .fill(ACCENT)
+}
+
+/// Options side by side in a thin pill, the chosen one filled: a choice, not more buttons.
+/// Drawn by hand: a frame in a row would stretch to the row's full height.
+fn segmented<T: PartialEq + Copy, const N: usize>(
+    ui: &mut egui::Ui,
+    // Total height, to line up with the button beside it.
+    height: f32,
+    value: &mut T,
+    options: [(&str, T); N],
+) {
+    let pad_x = 11.0;
+    let inset = 2.0;
+    let galleys = options.map(|(label, _)| {
+        egui::WidgetText::from(RichText::new(label).size(14.0)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Extend),
+            f32::INFINITY,
+            egui::TextStyle::Button,
+        )
+    });
+    let height = height - 2.0 * inset;
+    let widths = galleys.each_ref().map(|g| g.size().x + 2.0 * pad_x);
+    let size = egui::vec2(
+        widths.iter().sum::<f32>() + 2.0 * inset,
+        height + 2.0 * inset,
+    );
+    let (rect, pill) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let visuals = ui.visuals().clone();
+    let painter = ui.painter();
+    painter.rect_stroke(
+        rect,
+        size.y / 2.0,
+        visuals.widgets.noninteractive.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let mut x = rect.left() + inset;
+    for (i, ((_, option), galley)) in options.into_iter().zip(galleys).enumerate() {
+        let segment = egui::Rect::from_min_size(
+            egui::pos2(x, rect.top() + inset),
+            egui::vec2(widths[i], height),
+        );
+        x += widths[i];
+        let response = ui.interact(segment, pill.id.with(i), egui::Sense::click());
+        if response.clicked() {
+            *value = option;
+        }
+        let chosen = *value == option;
+        if chosen {
+            painter.rect_filled(segment, height / 2.0, visuals.widgets.inactive.weak_bg_fill);
+        }
+        let color = if chosen {
+            visuals.strong_text_color()
+        } else if response.hovered() {
+            visuals.text_color()
+        } else {
+            visuals.weak_text_color()
+        };
+        let pos = segment.center() - galley.size() / 2.0;
+        painter.galley(pos, galley, color);
+    }
 }
 
 fn status_line(ui: &mut egui::Ui, color: Color32, text: &str) {
