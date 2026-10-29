@@ -65,6 +65,8 @@ struct Settings {
     close_to_tray: bool,
     /// A virtual cable was there on some run; until then one that appears is picked by itself.
     cable_seen: bool,
+    /// Packets, losses and the buffer under the level meter.
+    show_stats: bool,
 }
 
 /// Which model suppresses noise (galdr::denoise::Model). The aliases are names from test builds.
@@ -96,6 +98,7 @@ impl Default for Settings {
             manual_ip: false,
             prefer_usb: true,
             cable_seen: false,
+            show_stats: true,
         }
     }
 }
@@ -501,7 +504,8 @@ impl GaldrApp {
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut self.settings.auto_buffer, "Auto")
                                     .on_hover_text(
-                                        "As small as your Wi-Fi allows: grows when packets                                          arrive late, shrinks slowly when they don't",
+                                        "As small as your Wi-Fi allows: grows when packets \
+                                         arrive late, shrinks slowly when they don't",
                                     );
                                 if !self.settings.auto_buffer {
                                     // Leave room for the value box so a narrow window does not
@@ -517,6 +521,14 @@ impl GaldrApp {
                                     );
                                 }
                             });
+                            ui.end_row();
+
+                            ui.label("Statistics");
+                            ui.checkbox(&mut self.settings.show_stats, "Show")
+                                .on_hover_text(
+                                    "While connected: packets, losses and the buffer under the \
+                                     level meter",
+                                );
                             ui.end_row();
                         });
                     if ui.button("Reset to defaults").clicked() {
@@ -685,7 +697,7 @@ impl GaldrApp {
                     });
                     if let Some(s) = live {
                         ui.add_space(6.0);
-                        status_ui(ui, s);
+                        status_ui(ui, s, self.settings.show_stats);
                     }
                 }
                 let outer = frame.content_ui.min_rect() + frame.frame.total_margin();
@@ -1218,7 +1230,7 @@ impl PhoneCard {
     }
 }
 
-fn status_ui(ui: &mut egui::Ui, s: &Stats) {
+fn status_ui(ui: &mut egui::Ui, s: &Stats, show_stats: bool) {
     let (color, text) = match &s.state {
         State::Connecting => (YELLOW, "Connecting…".to_string()),
         State::Streaming => (
@@ -1245,14 +1257,16 @@ fn status_ui(ui: &mut egui::Ui, s: &Stats) {
             .corner_radius(4)
             .fill(if s.level > 0.9 { RED } else { GREEN }),
     );
-    ui.label(
-        RichText::new(format!(
-            "packets {}   ·   lost {}   ·   bad {}   ·   buffer {} / {} ms",
-            s.received, s.lost, s.bad, s.buffered_ms, s.target_ms
-        ))
-        .small()
-        .weak(),
-    );
+    if show_stats {
+        ui.label(
+            RichText::new(format!(
+                "packets {}   ·   lost {}   ·   bad {}   ·   buffer {} / {} ms",
+                s.received, s.lost, s.bad, s.buffered_ms, s.target_ms
+            ))
+            .small()
+            .weak(),
+        );
+    }
 }
 
 /// Tray icon with Show / Quit; a left click also brings the window back.
