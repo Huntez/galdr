@@ -33,6 +33,7 @@ microphone for other programs.
 
 <p align="center">
   <img src="assets/screenshot-pc.png" alt="Galdr on the PC, streaming from a phone" height="460">
+  &nbsp;&nbsp;&nbsp;&nbsp;
   <img src="assets/screenshot-android.png" alt="Galdr on the phone, streaming to the PC" height="460">
 </p>
 
