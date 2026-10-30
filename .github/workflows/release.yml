@@ -18,13 +18,31 @@ env:
   TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
 
 jobs:
+  # Publishing a draft whose tag has gone creates the tag again, which would rebuild for
+  # nothing and then fail to draft a release that exists: skip everything then.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.release.outputs.skip }}
+    steps:
+      - id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ -n "$TAG" ] && gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            echo "::notice::Release $TAG exists already: nothing to build"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
   windows:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: windows-latest
     defaults:
       run:
         shell: bash
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Version
         run: |
@@ -36,6 +54,9 @@ jobs:
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
       - uses: dtolnay/rust-toolchain@stable
+
+      # Dependencies compiled by earlier runs: most of the build time.
+      - uses: Swatinem/rust-cache@v2
 
       - name: Build
         run: cargo build --release --locked
@@ -77,15 +98,17 @@ jobs:
             7z a -tzip "$dir.zip" "$dir" > /dev/null
           done
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: windows
           path: galdr*-windows-x64.zip
 
   android:
+    needs: check
+    if: needs.check.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
         with:
           submodules: true # libopus
 
@@ -98,10 +121,11 @@ jobs:
           fi
           echo "VERSION=$version" >> "$GITHUB_ENV"
 
-      - uses: actions/setup-java@v5
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: 25
+          cache: gradle
 
       - name: SDK, NDK and CMake
         run: |
@@ -138,7 +162,7 @@ jobs:
       - name: Rename
         run: cp android/app/build/outputs/apk/release/app-release.apk "galdr-$VERSION.apk"
 
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: android
           path: galdr-*.apk
@@ -150,7 +174,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v5
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true
