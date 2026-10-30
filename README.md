@@ -31,6 +31,11 @@ microphone for other programs.
 - **Volume on the phone, level meter on the PC**, tray icon, remembered settings
 - **Command line version** for scripts
 
+<p align="center">
+  <img src="assets/screenshot-pc.png" alt="Galdr on the PC, streaming from a phone" height="460">
+  <img src="assets/screenshot-android.png" alt="Galdr on the phone, streaming to the PC" height="460">
+</p>
+
 ## Requirements
 
 - **Phone:** Android 11 or newer, on the same Wi-Fi as the PC or on a USB cable.

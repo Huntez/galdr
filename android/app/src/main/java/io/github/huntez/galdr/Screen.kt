@@ -325,7 +325,7 @@ private fun Advanced(state: ScreenState, actions: ScreenActions, initiallyOpen: 
                 "Ready: plug the phone in, press Start and pick it under Phones on the PC (marked USB)."
             } else {
                 "Turn on USB debugging (Settings → System → Developer options) to connect with a " +
-                    "cable instead of Wi-Fi. The PC also needs adb, see the README."
+                    "cable instead of Wi-Fi. Galdr on the PC brings everything else."
             },
         )
         Spacer(Modifier.height(16.dp))
